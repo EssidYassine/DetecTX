@@ -1,0 +1,172 @@
+@import "tailwindcss";
+
+/* ============ Thème SOMBRE (défaut) — console SOC tactique ============ */
+:root {
+  --background: #090c12;
+  --surface: #0f141d;
+  --surface-2: #161d27;
+  --line: #202834;
+  --foreground: #e8eef6;
+  --muted: #8a97a9;
+  --accent: #2dd4bf;
+  --accent-fg: #04110e;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --critical: #f43f5e;
+  --glow: 45, 212, 191; /* accent RGB pour halos */
+  --elev: 0 18px 40px -28px rgba(0, 0, 0, 0.75);
+  color-scheme: dark;
+}
+
+/* ============ Thème CLAIR ============ */
+[data-theme="light"] {
+  --background: #f5f8fc;
+  --surface: #ffffff;
+  --surface-2: #eef2f7;
+  --line: #dde4ee;
+  --foreground: #0e1622;
+  --muted: #59657a;
+  --accent: #0d9488;
+  --accent-fg: #ffffff;
+  --ok: #059669;
+  --warn: #d97706;
+  --critical: #e11d48;
+  --glow: 13, 148, 136;
+  --elev: 0 18px 40px -28px rgba(15, 23, 42, 0.22);
+  color-scheme: light;
+}
+
+@theme {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-critical: var(--critical);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-chakra);
+}
+
+body {
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  background:
+    radial-gradient(100% 60% at 50% -15%, rgba(var(--glow), 0.05), transparent 55%),
+    var(--background);
+  transition: background-color 0.4s ease, color 0.4s ease;
+}
+
+/* Titres en police display (identité tactique) */
+h1, h2, h3 {
+  font-family: var(--font-display), var(--font-geist-sans), sans-serif;
+  letter-spacing: -0.01em;
+}
+
+::selection {
+  background: rgba(var(--glow), 0.28);
+  color: var(--foreground);
+}
+
+/* Scrollbar premium */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
+  border: 2px solid var(--background);
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ============ Utilitaires "instrument" ============ */
+/* Panneau élevé avec liseré haut lumineux */
+.panel {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.04), var(--elev);
+}
+/* Étiquette technique (uppercase, mono, tracking) */
+.eyebrow {
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ============ Halo ambiant ============ */
+.aurora {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(60% 40% at 50% -10%, rgba(var(--glow), 0.16), transparent 70%),
+    radial-gradient(40% 30% at 100% 0%, rgba(var(--glow), 0.09), transparent 70%);
+  animation: aurora-breathe 8s ease-in-out infinite;
+}
+
+/* Contour lumineux + vignette */
+.app-frame {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+  box-shadow:
+    inset 0 0 0 1px rgba(var(--glow), 0.16),
+    inset 0 0 90px -60px rgba(var(--glow), 0.5),
+    inset 0 -120px 160px -120px rgba(0, 0, 0, 0.6);
+  animation: frame-glow 6s ease-in-out infinite;
+}
+
+/* Grain subtil (texture) */
+.grain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 41;
+  opacity: 0.04;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+@keyframes aurora-breathe {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+@keyframes frame-glow {
+  0%, 100% { box-shadow: inset 0 0 0 1px rgba(var(--glow), 0.13), inset 0 0 80px -60px rgba(var(--glow), 0.38), inset 0 -120px 160px -120px rgba(0,0,0,0.6); }
+  50% { box-shadow: inset 0 0 0 1px rgba(var(--glow), 0.26), inset 0 0 110px -55px rgba(var(--glow), 0.66), inset 0 -120px 160px -120px rgba(0,0,0,0.55); }
+}
+
+/* Grille de fond */
+.soc-grid {
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: center;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+}
+
+/* Transitions / apparitions */
+.animate-page { animation: page-in 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+.animate-rise { animation: page-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora, .app-frame, .animate-page, .animate-rise { animation: none; }
+}

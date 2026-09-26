@@ -1,0 +1,11 @@
+id: detectx-filedrop-startup
+title: Fichier déposé dans le dossier Démarrage (persistance)
+description: >
+  Un fichier a été créé/modifié dans le dossier Startup de l'utilisateur —
+  mécanisme de persistance : tout fichier y est exécuté à l'ouverture de session.
+level: high
+mitre: T1547.001
+match:
+  channel: DeTecTX-FileMonitor
+  keywords:
+    - "\\Startup\\"

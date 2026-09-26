@@ -1,0 +1,11 @@
+id: detectx-persistence-run-key
+title: Persistance via clé de registre Run
+description: >
+  Détecte l'écriture dans les clés Run/RunOnce, mécanisme classique de
+  persistance au démarrage.
+level: medium
+mitre: T1547.001
+match:
+  keywords:
+    - "\\CurrentVersion\\Run"
+    - "\\CurrentVersion\\RunOnce"

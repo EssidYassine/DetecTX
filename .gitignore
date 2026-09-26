@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Data volumes (local)
+infra/data/
+opensearch-data/
+postgres-data/
+redis-data/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+*.log
+logs/
+
+# Base locale SQLite (mode sans Docker)
+*.db
+*.sqlite3
+
+# Binaires tiers téléchargés (Sysmon) : jamais versionnés
+collectors/tools/
+
+# Blender : .blend et aperçus sont régénérables (les scripts build_*.py font foi).
+# Les .glb et affiches de frontend/public/models, eux, sont versionnés (runtime).
+assets/3d/*.blend
+assets/3d/*.blend1
+assets/3d/*_preview.png
+
+# SigmaHQ : échantillons de régression inutiles au runtime (35 Mo)
+backend/app/detection/_sigma_src/regression_data/
+
+# Notes locales de démarrage (contiennent des secrets : webhook, JWT)
+START APP.txt

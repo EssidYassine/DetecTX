@@ -1,0 +1,69 @@
+<!--
+  DeTecTX — configuration Sysmon de départ (starter).
+  Couvre les événements les plus utiles à la détection SOC sur un poste.
+  Pour une config exhaustive, s'inspirer des configs modulaires reconnues
+  (Olaf Hartong / SwiftOnSecurity) puis adapter au bruit de VOTRE machine.
+
+  Installation (PowerShell admin) :
+    sysmon64.exe -accepteula -i sysmonconfig.xml
+  Mise à jour de la config :
+    sysmon64.exe -c sysmonconfig.xml
+-->
+<Sysmon schemaversion="4.90">
+  <HashAlgorithms>SHA256</HashAlgorithms>
+  <EventFiltering>
+
+    <!-- ProcessCreate (ID 1) : brique de base de la détection -->
+    <RuleGroup name="proc-create" groupRelation="or">
+      <ProcessCreate onmatch="exclude">
+        <!-- Réduire le bruit : exclure quelques binaires très fréquents -->
+        <Image condition="is">C:\Windows\System32\SearchProtocolHost.exe</Image>
+      </ProcessCreate>
+    </RuleGroup>
+
+    <!-- NetworkConnect (ID 3) : connexions sortantes -->
+    <RuleGroup name="net-connect" groupRelation="or">
+      <NetworkConnect onmatch="include">
+        <Initiated condition="is">true</Initiated>
+      </NetworkConnect>
+    </RuleGroup>
+
+    <!-- ProcessTerminate (ID 5) -->
+    <RuleGroup name="proc-term" groupRelation="or">
+      <ProcessTerminate onmatch="exclude" />
+    </RuleGroup>
+
+    <!-- ImageLoad (ID 7) : DLL non signées / suspectes uniquement (limite le bruit) -->
+    <RuleGroup name="image-load" groupRelation="or">
+      <ImageLoad onmatch="include">
+        <Signed condition="is">false</Signed>
+      </ImageLoad>
+    </RuleGroup>
+
+    <!-- CreateRemoteThread (ID 8) : injection de code -->
+    <RuleGroup name="remote-thread" groupRelation="or">
+      <CreateRemoteThread onmatch="exclude" />
+    </RuleGroup>
+
+    <!-- FileCreate (ID 11) : dépôts dans des zones sensibles -->
+    <RuleGroup name="file-create" groupRelation="or">
+      <FileCreate onmatch="include">
+        <TargetFilename condition="contains">\Startup\</TargetFilename>
+        <TargetFilename condition="contains">\Temp\</TargetFilename>
+      </FileCreate>
+    </RuleGroup>
+
+    <!-- RegistryEvent (ID 12/13) : persistance via Run keys -->
+    <RuleGroup name="registry" groupRelation="or">
+      <RegistryEvent onmatch="include">
+        <TargetObject condition="contains">\CurrentVersion\Run</TargetObject>
+      </RegistryEvent>
+    </RuleGroup>
+
+    <!-- DnsQuery (ID 22) : utile pour exfiltration / C2 -->
+    <RuleGroup name="dns" groupRelation="or">
+      <DnsQuery onmatch="exclude" />
+    </RuleGroup>
+
+  </EventFiltering>
+</Sysmon>

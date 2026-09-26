@@ -1,0 +1,13 @@
+id: detectx-bruteforce-logon
+title: Force brute d'authentification (échecs de connexion)
+description: >
+  Détecte un volume anormal d'échecs de connexion Windows (EventID 4625)
+  sur une courte fenêtre — indicateur de force brute.
+level: medium
+mitre: T1110
+match:
+  channel: Security
+  event_id: 4625
+threshold:
+  count: 5
+  minutes: 5

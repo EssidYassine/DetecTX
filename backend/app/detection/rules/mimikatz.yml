@@ -1,0 +1,14 @@
+id: detectx-mimikatz
+title: Indice de Mimikatz / dump d'identifiants
+description: >
+  Détecte les marqueurs caractéristiques de Mimikatz et du vol d'identifiants
+  en mémoire (LSASS).
+level: critical
+mitre: T1003.001
+match:
+  keywords:
+    - "mimikatz"
+    - "sekurlsa"
+    - "logonpasswords"
+    - "DumpCreds"
+    - "lsadump"

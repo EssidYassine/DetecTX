@@ -1,0 +1,142 @@
+<Sysmon schemaversion="4.91">
+  <!--
+    Config Sysmon DeTecTX  taillee pour maximiser la couverture des regles Sigma.
+    Philosophie : INCLURE large sur les Event IDs a forte valeur de detection
+    (process, reseau, injection, acces LSASS, registre de persistance, DNS),
+    et retirer un minimum de bruit signe/legitime. Adapte a un poste unique de lab.
+
+    Event IDs actives : 1 (ProcessCreate), 3 (NetworkConnect), 5 (ProcessTerminate),
+    7 (ImageLoad), 8 (CreateRemoteThread), 10 (ProcessAccess),
+    11 (FileCreate), 12/13/14 (Registry), 15 (FileCreateStreamHash / ADS),
+    17/18 (NamedPipe), 22 (DnsQuery), 23 (FileDelete), 25 (ProcessTampering).
+
+    Reglage : passe en revue les <Exclude> si un process legitime genere trop
+    d'evenements. Doc : https://learn.microsoft.com/sysinternals/downloads/sysmon
+  -->
+  <HashAlgorithms>SHA256,IMPHASH</HashAlgorithms>
+  <DnsLookup>False</DnsLookup>
+  <CheckRevocation>False</CheckRevocation>
+
+  <EventFiltering>
+
+    <!-- 1 : Creation de processus  cur de la detection (ligne de commande + hash + parent) -->
+    <RuleGroup name="proc-create" groupRelation="or">
+      <ProcessCreate onmatch="exclude">
+        <!-- Bruit signe Microsoft a faible valeur  commente si tu veux TOUT voir -->
+        <Image condition="is">C:\Windows\System32\SearchProtocolHost.exe</Image>
+        <Image condition="is">C:\Windows\System32\SearchFilterHost.exe</Image>
+        <Image condition="is">C:\Windows\System32\wbem\WmiPrvSE.exe</Image>
+      </ProcessCreate>
+    </RuleGroup>
+
+    <!-- 3 : Connexions reseau  exfil / C2 / scan. Large, on exclut le bruit local -->
+    <RuleGroup name="net-connect" groupRelation="or">
+      <NetworkConnect onmatch="exclude">
+        <DestinationIp condition="is">127.0.0.1</DestinationIp>
+        <DestinationIp condition="is">::1</DestinationIp>
+        <SourceIp condition="is">127.0.0.1</SourceIp>
+      </NetworkConnect>
+    </RuleGroup>
+
+    <!-- 5 : Fin de processus (utile pour correler les cycles de vie) -->
+    <RuleGroup name="proc-term" groupRelation="or">
+      <ProcessTerminate onmatch="exclude"/>
+    </RuleGroup>
+
+    <!-- 7 : Chargement d'images/DLL  cible (non signe OU DLL souvent detournees) -->
+    <RuleGroup name="image-load" groupRelation="or">
+      <ImageLoad onmatch="include">
+        <Signed condition="is">false</Signed>
+        <ImageLoaded condition="end with">\amsi.dll</ImageLoaded>
+        <ImageLoaded condition="end with">\vaultcli.dll</ImageLoaded>
+        <ImageLoaded condition="end with">\wldp.dll</ImageLoaded>
+        <ImageLoaded condition="end with">\clr.dll</ImageLoaded>
+        <ImageLoaded condition="end with">\clrjit.dll</ImageLoaded>
+        <ImageLoaded condition="end with">\System.Management.Automation.dll</ImageLoaded>
+      </ImageLoad>
+    </RuleGroup>
+
+    <!-- 8 : Thread distant  signature d'injection de code -->
+    <RuleGroup name="remote-thread" groupRelation="or">
+      <CreateRemoteThread onmatch="exclude">
+        <SourceImage condition="is">C:\Windows\System32\svchost.exe</SourceImage>
+      </CreateRemoteThread>
+    </RuleGroup>
+
+    <!-- 10 : Acces a un processus  surtout LSASS (dump d'identifiants / Mimikatz) -->
+    <RuleGroup name="proc-access" groupRelation="or">
+      <ProcessAccess onmatch="include">
+        <TargetImage condition="end with">\lsass.exe</TargetImage>
+      </ProcessAccess>
+    </RuleGroup>
+
+    <!-- 11 : Creation de fichiers  zones sensibles (demarrage, temp, taches) -->
+    <RuleGroup name="file-create" groupRelation="or">
+      <FileCreate onmatch="include">
+        <TargetFilename condition="contains">\Start Menu\Programs\Startup\</TargetFilename>
+        <TargetFilename condition="contains">\Windows\System32\Tasks\</TargetFilename>
+        <TargetFilename condition="end with">.exe</TargetFilename>
+        <TargetFilename condition="end with">.dll</TargetFilename>
+        <TargetFilename condition="end with">.ps1</TargetFilename>
+        <TargetFilename condition="end with">.bat</TargetFilename>
+        <TargetFilename condition="end with">.vbs</TargetFilename>
+        <TargetFilename condition="end with">.hta</TargetFilename>
+        <TargetFilename condition="end with">.lnk</TargetFilename>
+      </FileCreate>
+    </RuleGroup>
+
+    <!-- 12/13/14 : Registre  cles de persistance et de configuration sensibles -->
+    <RuleGroup name="registry" groupRelation="or">
+      <RegistryEvent onmatch="include">
+        <TargetObject condition="contains">\CurrentVersion\Run</TargetObject>
+        <TargetObject condition="contains">\CurrentVersion\RunOnce</TargetObject>
+        <TargetObject condition="contains">\Policies\Explorer\Run</TargetObject>
+        <TargetObject condition="contains">\CurrentControlSet\Services\</TargetObject>
+        <TargetObject condition="contains">\Winlogon\</TargetObject>
+        <TargetObject condition="contains">\Image File Execution Options\</TargetObject>
+        <TargetObject condition="contains">\CurrentVersion\Explorer\Shell Folders\</TargetObject>
+      </RegistryEvent>
+    </RuleGroup>
+
+    <!-- 15 : Alternate Data Streams (marque du web, payloads caches) -->
+    <RuleGroup name="ads" groupRelation="or">
+      <FileCreateStreamHash onmatch="include">
+        <TargetFilename condition="end with">.exe</TargetFilename>
+        <TargetFilename condition="end with">.dll</TargetFilename>
+        <TargetFilename condition="end with">.ps1</TargetFilename>
+      </FileCreateStreamHash>
+    </RuleGroup>
+
+    <!-- 17/18 : Named pipes  beacons C2 (Cobalt Strike) et mouvement lateral -->
+    <RuleGroup name="pipes" groupRelation="or">
+      <PipeEvent onmatch="include">
+        <PipeName condition="contains">\</PipeName>
+      </PipeEvent>
+    </RuleGroup>
+
+    <!-- 22 : Requetes DNS  exfil, C2, domaines malveillants (signal tres riche) -->
+    <RuleGroup name="dns" groupRelation="or">
+      <DnsQuery onmatch="exclude">
+        <QueryName condition="end with">.in-addr.arpa</QueryName>
+        <QueryName condition="end with">.arpa</QueryName>
+      </DnsQuery>
+    </RuleGroup>
+
+    <!-- 23 : Suppression de fichiers (effacement de traces)  cible executables/scripts -->
+    <RuleGroup name="file-delete" groupRelation="or">
+      <FileDelete onmatch="include">
+        <TargetFilename condition="end with">.exe</TargetFilename>
+        <TargetFilename condition="end with">.dll</TargetFilename>
+        <TargetFilename condition="end with">.ps1</TargetFilename>
+      </FileDelete>
+    </RuleGroup>
+
+    <!-- 25 : Process Tampering (process hollowing / herpaderping) -->
+    <RuleGroup name="proc-tamper" groupRelation="or">
+      <ProcessTampering onmatch="include">
+        <Image condition="contains">\</Image>
+      </ProcessTampering>
+    </RuleGroup>
+
+  </EventFiltering>
+</Sysmon>

@@ -1,0 +1,15 @@
+id: detectx-lolbin-download
+title: "Living-off-the-land : téléchargement via binaire système"
+description: >
+  Détecte l'usage de binaires légitimes (LOLBins) pour télécharger une charge
+  utile : certutil, bitsadmin, mshta distant.
+level: high
+mitre: T1105
+match:
+  keywords:
+    - "certutil -urlcache"
+    - "certutil.exe -urlcache"
+    - "bitsadmin /transfer"
+    - "mshta http"
+    - "Invoke-WebRequest"
+    - "DownloadString"

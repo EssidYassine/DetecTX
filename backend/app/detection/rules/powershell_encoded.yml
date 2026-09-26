@@ -1,0 +1,13 @@
+id: detectx-powershell-encoded
+title: Commande PowerShell encodée (base64)
+description: >
+  Détecte l'usage d'un payload PowerShell encodé (-EncodedCommand / FromBase64String),
+  technique fréquente d'obfuscation d'exécution.
+level: high
+mitre: T1059.001
+match:
+  keywords:
+    - "-EncodedCommand"
+    - "-enc "
+    - "FromBase64String"
+    - "-e JAB"
