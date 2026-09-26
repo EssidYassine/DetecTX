@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from opensearchpy.exceptions import ConnectionError as OpenSearchConnectionError
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from app import __version__
 from app.clients import get_opensearch, get_redis
@@ -37,6 +37,30 @@ logger = logging.getLogger("detectx")
 settings = get_settings()
 
 
+# Colonnes ajoutées après la création initiale des tables : create_all ne modifie pas une
+# table existante. Migration légère, idempotente et portable (SQLite / PostgreSQL).
+# TODO(phase-3+): remplacer par Alembic.
+_LATE_COLUMNS = {
+    "alerts": {
+        "resolution": "VARCHAR(20)",
+        "triaged_by": "VARCHAR(255)",
+        "triaged_at": "TIMESTAMP",
+    },
+}
+
+
+def _add_missing_columns(sync_conn) -> None:
+    inspector = inspect(sync_conn)
+    for table, columns in _LATE_COLUMNS.items():
+        if not inspector.has_table(table):
+            continue
+        existing = {c["name"] for c in inspector.get_columns(table)}
+        for name, ddl in columns.items():
+            if name not in existing:
+                sync_conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                logger.info("migration : colonne %s.%s ajoutée", table, name)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Ouvre/ferme proprement les connexions partagées au cycle de vie de l'app."""
@@ -44,6 +68,7 @@ async def lifespan(app: FastAPI):
     # TODO(phase-3+): migrer vers Alembic pour un versioning de schéma propre.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_add_missing_columns)
 
     # Bootstrap de l'index OpenSearch — non bloquant s'il n'est pas encore up.
     try:
