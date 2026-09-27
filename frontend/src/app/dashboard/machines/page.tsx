@@ -21,6 +21,7 @@ import { diffExposure, diffNetwork, diffProcesses, pushEvents, type ActivityEven
 import { fmtBytes, fmtUptime } from "@/lib/host";
 import { aggregateNodes, aggregatePorts } from "@/lib/netmap";
 import { buildTree, hintsFor } from "@/lib/proctree";
+import { usePolling } from "@/lib/use-polling";
 import { buildApps, exeKey, type AppGroup } from "@/lib/apps";
 import { CpuPanel, RamPanel, StoragePanel } from "@/components/system/hardware-panels";
 import { CityPanel } from "@/components/system/city-panel";
@@ -48,32 +49,6 @@ type View = (typeof VIEWS)[number]["key"];
 
 // Desktop : tout tient dans l'écran (même calcul que l'Overview) ; seules les listes défilent.
 const GRID = "grid gap-4 lg:h-[calc(100dvh-13.75rem)] lg:min-h-[520px] lg:grid-cols-12";
-
-/**
- * Exécute `task` tout de suite puis à intervalle, en sautant les tours où l'onglet est caché ;
- * rafraîchit immédiatement au retour sur l'onglet (pas de données périmées pendant `ms`).
- * Jamais deux requêtes simultanées : un tour est sauté tant que le précédent n'a pas répondu.
- */
-function usePolling(task: () => Promise<void>, ms: number) {
-  useEffect(() => {
-    let inFlight = false;
-    const run = () => {
-      if (inFlight || document.visibilityState !== "visible") return;
-      inFlight = true;
-      void task().finally(() => {
-        inFlight = false;
-      });
-    };
-    const first = window.setTimeout(run, 0);
-    const id = window.setInterval(run, ms);
-    document.addEventListener("visibilitychange", run);
-    return () => {
-      window.clearTimeout(first);
-      window.clearInterval(id);
-      document.removeEventListener("visibilitychange", run);
-    };
-  }, [task, ms]);
-}
 
 export default function MachinesPage() {
   return (

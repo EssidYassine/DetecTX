@@ -1,43 +1,21 @@
 "use client";
 
-import { Suspense, useCallback, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { searchEvents, type EventItem } from "@/lib/api";
-import { LevelBadge, shortChannel } from "@/components/ui";
-import { DataTable, type Column } from "@/components/data-table";
+import { fetchCollectionHealth, fetchEventHistogram, fetchHunts, fetchMe, type CollectionHealth, type EventHistogram, type Hunt } from "@/lib/api";
+import { binWindow, fmtHourRange, LANES, LIST_WINDOWS, PERIODS, type PeriodKey } from "@/lib/events-ui";
+import { usePolling } from "@/lib/use-polling";
 import { ReportButton } from "@/components/report-button";
+import type { ReliefSlice } from "@/components/three/event-relief";
+import { ReliefPanel } from "@/components/events/relief-panel";
+import { HealthPanel } from "@/components/events/health-panel";
+import { HuntPanel, type EventQuery } from "@/components/events/hunt-panel";
+import { EventReader } from "@/components/events/event-reader";
 
-const CHANNELS = [
-  { value: "", label: "Tous les canaux" },
-  { value: "Security", label: "Security" },
-  { value: "System", label: "System" },
-  { value: "Application", label: "Application" },
-  { value: "Microsoft-Windows-Sysmon/Operational", label: "Sysmon" },
-  { value: "Microsoft-Windows-PowerShell/Operational", label: "PowerShell" },
-  { value: "DeTecTX-FileMonitor", label: "Activité fichiers" },
-  { value: "DeTecTX-LogFile", label: "Fichiers .log" },
-];
-
-const COLUMNS: Column<EventItem>[] = [
-  {
-    header: "Heure",
-    className: "whitespace-nowrap font-mono text-xs text-muted",
-    cell: (e) => new Date(e.timestamp).toLocaleString(),
-  },
-  {
-    header: "Canal",
-    cell: (e) => (
-      <span className="rounded bg-surface-2 px-2 py-0.5 text-xs">{shortChannel(e.channel)}</span>
-    ),
-  },
-  { header: "ID", className: "font-mono text-xs", cell: (e) => e.event_id ?? "—" },
-  { header: "Niveau", cell: (e) => <LevelBadge level={e.level} /> },
-  {
-    header: "Message",
-    className: "max-w-md truncate text-muted",
-    cell: (e) => e.message ?? "—",
-  },
-];
+const HEALTH_MS = 15_000; // l'agent envoie un battement de cœur toutes les 15 s
+const RELIEF_MS = 60_000;
+const HUNTS_MS = 60_000;
+const HEALTH_TONE = { ok: "accent", degraded: "warn", down: "critical" } as const;
 
 // useSearchParams() exige une frontière Suspense pour que Next puisse pré-rendre la page.
 export default function EventsPage() {
@@ -48,64 +26,133 @@ export default function EventsPage() {
   );
 }
 
-/** Fenêtre « dernières N minutes » lisible (fournie par le cadran 24 h de l'Overview). */
-function windowLabel(minutes: number): string {
-  if (minutes < 60) return `${minutes} min`;
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return m ? `${h} h ${m} min` : `${h} h`;
+/** Fenêtre « dernières N minutes » (lien depuis le cadran 24 h de l'Overview) -> tranche. */
+function initialQuery(channel: string | null, minutes: number | null): EventQuery {
+  const valid = minutes !== null && Number.isInteger(minutes) && minutes > 0 && minutes <= 7 * 24 * 60;
+  const until = new Date();
+  const since = valid ? new Date(until.getTime() - (minutes as number) * 60_000) : null;
+  return {
+    hunt: null,
+    channel: channel && LANES.some((l) => l.channel === channel) ? channel : "",
+    eventId: null,
+    q: "",
+    window: "7d",
+    slice: since ? { since: since.toISOString(), until: until.toISOString(), label: `Dernières ${minutes} min` } : null,
+    page: 0,
+  };
 }
 
 function EventsView() {
   const sp = useSearchParams();
-  const [channel, setChannel] = useState(sp.get("channel") ?? "");
-  const rawMinutes = Number(sp.get("minutes"));
-  const [minutes, setMinutes] = useState<number | undefined>(
-    Number.isInteger(rawMinutes) && rawMinutes > 0 && rawMinutes <= 7 * 24 * 60 ? rawMinutes : undefined,
-  );
+  const [query, setQuery] = useState<EventQuery>(() => initialQuery(sp.get("channel"), sp.get("minutes") ? Number(sp.get("minutes")) : null));
+  const [period, setPeriod] = useState<PeriodKey>("48h");
+  const [histogram, setHistogram] = useState<EventHistogram | null>(null);
+  const [health, setHealth] = useState<CollectionHealth | null>(null);
+  const [hunts, setHunts] = useState<Hunt[] | null>(null);
+  const [email, setEmail] = useState<string | null>(null);
+  const [relief, setRelief] = useState<ReliefSlice | null>(null);
+  const [opened, setOpened] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const fetchPage = useCallback(
-    (p: { offset: number; limit: number; q: string }) =>
-      searchEvents({ ...p, channel: channel || undefined, minutes }),
-    [channel, minutes],
-  );
+  const hours = PERIODS.find((p) => p.key === period)?.hours ?? 48;
 
-  const toolbar = (
-    <div className="flex flex-wrap items-center gap-2">
-      <select
-        value={channel}
-        onChange={(e) => setChannel(e.target.value)}
-        className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm outline-none focus:border-accent"
-      >
-        {CHANNELS.map((c) => (
-          <option key={c.value} value={c.value}>{c.label}</option>
-        ))}
-      </select>
-      {minutes !== undefined && (
-        <span className="flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-2.5 py-1.5 text-xs text-accent">
-          Fenêtre · dernières {windowLabel(minutes)}
-          <button onClick={() => setMinutes(undefined)} className="text-muted transition hover:text-foreground" aria-label="Retirer le filtre de fenêtre">
-            ✕
-          </button>
-        </span>
-      )}
-    </div>
-  );
+  const loadHealth = useCallback(async () => {
+    try {
+      setHealth(await fetchCollectionHealth());
+      setNow(Date.now());
+    } catch {
+      // Santé indisponible : on garde le dernier état connu.
+    }
+  }, []);
+  const loadRelief = useCallback(async () => {
+    try {
+      setHistogram(await fetchEventHistogram(hours));
+      setRefreshKey((k) => k + 1); // la liste suit le rythme du relief
+    } catch {
+      // Relief indisponible : la vue garde le dernier relevé.
+    }
+  }, [hours]);
+  // Compteurs des chasses sur la même période que la liste (« Tout » = 90 jours, plafond de l'API).
+  const huntMinutes = LIST_WINDOWS.find((w) => w.key === query.window)?.minutes ?? 60 * 24 * 90;
+  const loadHunts = useCallback(async () => {
+    try {
+      setHunts(await fetchHunts(huntMinutes));
+    } catch {
+      // Chasses indisponibles : la liste reste utilisable sans elles.
+    }
+  }, [huntMinutes]);
+
+  usePolling(loadHealth, HEALTH_MS);
+  usePolling(loadRelief, RELIEF_MS);
+  usePolling(loadHunts, HUNTS_MS);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchMe()
+      .then((me) => !cancelled && setEmail(me.email))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpened(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Tout changement de filtre ramène à la première page (sauf la pagination elle-même).
+  const onQuery = useCallback((patch: Partial<EventQuery>) => {
+    if ("slice" in patch && patch.slice === null) setRelief(null);
+    setQuery((q) => ({ ...q, ...("page" in patch ? {} : { page: 0 }), ...patch }));
+  }, []);
+
+  function onReliefSelect(slice: ReliefSlice | null) {
+    setRelief(slice);
+    if (!slice || !histogram) {
+      onQuery({ slice: null });
+      return;
+    }
+    const label = `${fmtHourRange(histogram.start, slice.bin)}${slice.channel ? ` · ${LANES.find((l) => l.channel === slice.channel)?.short ?? slice.channel}` : ""}`;
+    setQuery((q) => ({ ...q, page: 0, hunt: null, eventId: null, channel: slice.channel ?? "", slice: { ...binWindow(histogram.start, slice.bin), label } }));
+  }
+
+  const tone = health ? HEALTH_TONE[health.status] : "muted";
 
   return (
     <>
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Journaux Windows</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-lg font-semibold">Journaux &amp; chasse</h1>
+          <p className="truncate text-sm text-muted">
+            {health ? (
+              <span style={{ color: `var(--${tone})` }}>{health.summary}</span>
+            ) : (
+              "Ce que Windows a enregistré, lu en clair, et les questions à lui poser."
+            )}
+          </p>
+        </div>
         <ReportButton />
       </div>
-      <DataTable
-        columns={COLUMNS}
-        fetchPage={fetchPage}
-        rowKey={(_, i) => i}
-        searchPlaceholder="Rechercher dans le message…"
-        toolbar={toolbar}
-        emptyMessage="Aucun événement. Lancez le collecteur (collectors/README.md)."
-      />
+
+      {/* Desktop : tout tient dans l'écran ; seules la liste et les fiches défilent. */}
+      <div className="grid gap-4 lg:h-[calc(100dvh-13.25rem)] lg:min-h-[520px] lg:grid-cols-12 lg:grid-rows-[minmax(0,0.95fr)_minmax(0,1.25fr)]">
+        <ReliefPanel histogram={histogram} period={period} onPeriod={setPeriod} selected={relief} onSelect={onReliefSelect} className="h-80 lg:col-span-8 lg:h-auto" />
+        <HealthPanel health={health} email={email} now={now} className="h-80 lg:col-span-4 lg:h-auto" />
+        <HuntPanel
+          query={query}
+          onQuery={onQuery}
+          hunts={hunts}
+          health={health}
+          selected={opened}
+          onOpen={setOpened}
+          refreshKey={refreshKey}
+          className="h-[32rem] lg:col-span-8 lg:h-auto"
+        />
+        <EventReader eventId={opened} onClose={() => setOpened(null)} className="h-[28rem] lg:col-span-4 lg:h-auto" />
+      </div>
     </>
   );
 }

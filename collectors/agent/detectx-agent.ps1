@@ -11,6 +11,10 @@
   Lancer PowerShell EN ADMINISTRATEUR pour couvrir le journal Security (boot, logons).
   Arreter avec Ctrl+C.
 
+  Robustesse : chaque cycle envoie un battement de coeur (meme sans evenement) pour que
+  DeTecTX sache que la collecte tourne ; la session est renouvelee automatiquement quand
+  le jeton expire (sinon la collecte s'arreterait en silence au bout de quelques heures).
+
 .EXAMPLE
   .\detectx-agent.ps1 -Email me@poste.local -IntervalSec 15
 .EXAMPLE
@@ -30,6 +34,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$AgentVersion = "1.1"
+$IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $IsAdmin) {
+    Write-Host "[!] Agent lance SANS droits administrateur : le journal Security ne sera pas collecte." -ForegroundColor Yellow
+}
 
 if (-not $WatchPaths) {
     $WatchPaths = @(
@@ -52,24 +62,41 @@ if (-not $Password) {
         [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
 }
 
-$auth = Invoke-RestMethod -Method Post -Uri "$ApiUrl/auth/login" `
-    -Body @{ username = $Email; password = $Password } `
-    -ContentType "application/x-www-form-urlencoded"
-$headers = @{ Authorization = "Bearer $($auth.access_token)" }
-Write-Host "[OK] Agent DeTecTX connecte. Surveillance continue (Ctrl+C pour arreter)." -ForegroundColor Green
+function Connect-DeTecTX {
+    $auth = Invoke-RestMethod -Method Post -Uri "$ApiUrl/auth/login" `
+        -Body @{ username = $Email; password = $Password } `
+        -ContentType "application/x-www-form-urlencoded"
+    $script:headers = @{ Authorization = "Bearer $($auth.access_token)" }
+}
+
+Connect-DeTecTX
+Write-Host "[OK] Agent DeTecTX $AgentVersion connecte. Surveillance continue (Ctrl+C pour arreter)." -ForegroundColor Green
 Write-Host ("     Dossiers surveilles: " + ($WatchPaths -join " ; ")) -ForegroundColor DarkGray
 
 function Send-Events($evts) {
-    if (-not $evts -or @($evts).Count -eq 0) { return 0 }
-    $payload = @{ events = @($evts) } | ConvertTo-Json -Depth 6
-    try {
-        $r = Invoke-RestMethod -Method Post -Uri "$ApiUrl/events/ingest" `
-            -Headers $headers -Body $payload -ContentType "application/json"
-        return $r.indexed
-    } catch {
-        Write-Host "[--] Envoi echoue: $($_.Exception.Message)" -ForegroundColor DarkYellow
-        return 0
+    # Toujours envoyer, meme un lot vide : c'est le battement de coeur de l'agent.
+    $payload = @{
+        events = @($evts)
+        agent  = @{ computer = $env:COMPUTERNAME; version = $AgentVersion; admin = $IsAdmin; interval_sec = $IntervalSec }
+    } | ConvertTo-Json -Depth 6
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        try {
+            $r = Invoke-RestMethod -Method Post -Uri "$ApiUrl/events/ingest" `
+                -Headers $script:headers -Body $payload -ContentType "application/json"
+            return $r.indexed
+        } catch {
+            $status = $null
+            if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+            if ($status -eq 401 -and $attempt -eq 1) {
+                # Jeton expire : on renouvelle la session puis on renvoie le meme lot.
+                try { Connect-DeTecTX; Write-Host "[..] Session renouvelee." -ForegroundColor DarkGray; continue }
+                catch { Write-Host "[--] Reconnexion impossible: $($_.Exception.Message)" -ForegroundColor DarkYellow }
+            }
+            Write-Host "[--] Envoi echoue: $($_.Exception.Message)" -ForegroundColor DarkYellow
+            return 0
+        }
     }
+    return 0
 }
 
 function New-FileEvent($eid, $level, $change, $path) {

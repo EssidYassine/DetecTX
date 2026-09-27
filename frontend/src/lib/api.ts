@@ -94,13 +94,63 @@ export async function fetchMe(): Promise<User> {
 }
 
 export interface EventItem {
+  id: string;
   timestamp: string;
+  /** Libellé de l'Event ID (catalogue DeTecTX), ex. « Nouveau service installé ». */
+  title: string | null;
   channel: string;
   event_id: number | null;
   provider: string | null;
   computer: string | null;
   level: string | null;
+  record_id: number | null;
   message: string | null;
+}
+
+export interface EventKnowledge {
+  title: string;
+  what: string;
+  why: string;
+  level: "info" | "low" | "medium" | "high";
+  attack: string | null;
+}
+
+export interface EventDetail extends EventItem {
+  fields: Record<string, unknown>;
+  knowledge: EventKnowledge | null;
+  alerts: { id: number; rule_title: string; severity: string; status: string; created_at: string }[];
+}
+
+export interface EventHistogram {
+  start: string; // début de la 1re tranche horaire (UTC)
+  hours: number;
+  channels: string[];
+  counts: Record<string, number[]>;
+  alerts: { bin: number; channel: string | null; severity: string; count: number }[];
+}
+
+export interface Hunt {
+  id: string;
+  title: string;
+  question: string;
+  channels: string[];
+  event_ids: number[];
+  keywords: string[];
+  attack: string | null;
+  level: string;
+  requires: ("admin" | "sysmon")[];
+  count: number;
+}
+
+export type ChannelStatus = "ok" | "quiet" | "stale" | "missing";
+
+export interface CollectionHealth {
+  status: "ok" | "degraded" | "down";
+  summary: string;
+  agent: { alive: boolean; computer: string | null; last_seen: string | null; version: string | null; admin: boolean | null; interval_sec: number | null };
+  sysmon: { installed: boolean; running: boolean; service: string | null };
+  channels: { channel: string; label: string; last_event: string | null; count_24h: number; status: ChannelStatus; hint: string | null }[];
+  last_event: string | null;
 }
 
 export interface EventStats {
@@ -129,18 +179,50 @@ export async function searchEvents(params: {
   limit?: number;
   q?: string;
   channel?: string;
+  eventId?: number;
+  hunt?: string;
   minutes?: number;
+  since?: string;
+  until?: string;
 }): Promise<EventPage> {
   const qs = new URLSearchParams();
   qs.set("offset", String(params.offset ?? 0));
   qs.set("limit", String(params.limit ?? 50));
   if (params.q) qs.set("q", params.q);
   if (params.channel) qs.set("channel", params.channel);
+  if (params.eventId !== undefined) qs.set("event_id", String(params.eventId));
+  if (params.hunt) qs.set("hunt", params.hunt);
   if (params.minutes) qs.set("minutes", String(params.minutes));
+  if (params.since) qs.set("since", params.since);
+  if (params.until) qs.set("until", params.until);
 
   const res = await fetch(`${API_URL}/events?${qs.toString()}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await readError(res));
   return (await res.json()) as EventPage;
+}
+
+export async function fetchEventDetail(id: string): Promise<EventDetail> {
+  const res = await fetch(`${API_URL}/events/${encodeURIComponent(id)}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as EventDetail;
+}
+
+export async function fetchEventHistogram(hours = 48): Promise<EventHistogram> {
+  const res = await fetch(`${API_URL}/events/histogram?hours=${hours}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as EventHistogram;
+}
+
+export async function fetchHunts(minutes = 60 * 24 * 7): Promise<Hunt[]> {
+  const res = await fetch(`${API_URL}/events/hunts?minutes=${minutes}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as Hunt[];
+}
+
+export async function fetchCollectionHealth(): Promise<CollectionHealth> {
+  const res = await fetch(`${API_URL}/events/health`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as CollectionHealth;
 }
 
 export type AlertStatus = "new" | "ack" | "closed";

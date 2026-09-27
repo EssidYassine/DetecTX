@@ -24,9 +24,10 @@ Télémétrie riche et continue, en service.
 
 ### 1. Sysmon (télémétrie détaillée : process, réseau, injection, persistance)
 
+Dans un PowerShell **administrateur** (installe le pilote et applique `config\sysmon-config.xml` ; relancé, il recharge juste la configuration) :
+
 ```powershell
-# Télécharger Sysmon depuis Sysinternals, puis :
-sysmon64.exe -accepteula -i sysmon\sysmonconfig.xml
+powershell -ExecutionPolicy Bypass -File .\install-sysmon.ps1
 ```
 
 Les événements arrivent dans le canal `Microsoft-Windows-Sysmon/Operational`.
@@ -59,6 +60,8 @@ Toutes les 15 s, il envoie à DeTecTX :
    ```
 
 Lancer **en administrateur** pour couvrir le journal `Security`. Ctrl+C pour arrêter.
+
+L'agent envoie un **battement de cœur** à chaque cycle (même sans nouvel événement) : la page Événements de DeTecTX affiche ainsi si la collecte tourne, et depuis quand elle est arrêtée. La session est **renouvelée automatiquement** à l'expiration du jeton.
 
 ### Détecter l'*ouverture* d'un dossier/fichier (accès en lecture)
 Windows n'émet pas d'événement à la simple ouverture, sauf si l'**audit d'accès aux objets** est activé (Event ID **4663**) :

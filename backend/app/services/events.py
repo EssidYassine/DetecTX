@@ -8,11 +8,12 @@ alertes → dashboard) sur un poste sans Docker.
 from datetime import datetime, timedelta, timezone
 
 from opensearchpy.helpers import async_bulk
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 
 from app.clients import get_opensearch
 from app.config import get_settings
 from app.db import SessionLocal
+from app.detection.event_catalog import CATALOG, family
 from app.models.event import Event
 from app.schemas.events import EventOut, EventPage, EventStats, IngestEvent
 
@@ -106,16 +107,27 @@ async def index_events(events: list[IngestEvent]) -> int:
 # ───────────────────────── Lecture (endpoint /events) ──────────────────────
 async def search_events(
     *,
-    channel: str | None = None,
-    event_id: int | None = None,
+    channel: str | list[str] | None = None,
+    event_id: int | list[int] | None = None,
     q: str | None = None,
+    keywords: list[str] | None = None,
     minutes: int | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
     offset: int = 0,
     limit: int = 50,
 ) -> EventPage:
+    """`q` : texte libre saisi ; `keywords` : mots-clés d'une chasse (au moins un doit figurer).
+    Les deux se combinent : ET entre `q` et le groupe de mots-clés."""
     if _use_sql():
         async with SessionLocal() as session:
-            conds = _sql_conditions(channel, event_id, [q] if q else [], minutes, phrase=True)
+            conds = _sql_conditions(channel, event_id, keywords or [], minutes, phrase=True)
+            if q:
+                conds.append(Event.message.ilike(f"%{q}%"))
+            if since is not None:
+                conds.append(Event.ts >= _utc(since))
+            if until is not None:
+                conds.append(Event.ts < _utc(until))
             total = await session.scalar(select(func.count()).select_from(Event).where(*conds))
             rows = (
                 await session.scalars(
@@ -124,8 +136,14 @@ async def search_events(
             ).all()
             return EventPage(total=total or 0, items=[_row_to_out(r) for r in rows])
 
+    query = _os_query(channel, event_id, keywords or [], minutes)
+    if q:
+        query["bool"].setdefault("must", []).append({"match_phrase": {"message": q}})
+    if since is not None or until is not None:
+        bounds = {k: _utc(v).isoformat() for k, v in (("gte", since), ("lt", until)) if v is not None}
+        query["bool"]["filter"].append({"range": {"@timestamp": bounds}})
     body = {
-        "query": _os_query(channel, event_id, [q] if q else [], minutes),
+        "query": query,
         "sort": [{"@timestamp": {"order": "desc"}}],
         "from": offset,
         "size": limit,
@@ -135,7 +153,7 @@ async def search_events(
     hits = res["hits"]
     return EventPage(
         total=hits["total"]["value"],
-        items=[_src_to_out(h["_source"]) for h in hits["hits"]],
+        items=[_src_to_out(h) for h in hits["hits"]],
     )
 
 
@@ -178,8 +196,8 @@ async def events_stats() -> EventStats:
 # ───────────────────── API pour le moteur de détection ─────────────────────
 async def query_events(
     *,
-    channel: str | None,
-    event_id: int | None,
+    channel: str | list[str] | None,
+    event_id: int | list[int] | None,
     keywords: list[str],
     minutes: int | None,
     limit: int,
@@ -224,7 +242,7 @@ async def query_events(
 
 
 async def count_events(
-    *, channel: str | None, event_id: int | None, keywords: list[str], minutes: int | None
+    *, channel: str | list[str] | None, event_id: int | list[int] | None, keywords: list[str], minutes: int | None
 ) -> int:
     if _use_sql():
         async with SessionLocal() as session:
@@ -238,12 +256,21 @@ async def count_events(
 
 
 # ─────────────────────────────── Helpers ──────────────────────────────────
+def _as_list(value) -> list:
+    """None -> [] ; valeur -> [valeur] ; liste -> liste (sans les vides)."""
+    if value is None:
+        return []
+    values = value if isinstance(value, (list, tuple)) else [value]
+    return [v for v in values if v is not None and v != ""]
+
+
 def _os_query(channel, event_id, keywords, minutes) -> dict:
     filters: list[dict] = []
-    if channel:
-        filters.append({"term": {"channel": channel}})
-    if event_id is not None:
-        filters.append({"term": {"event_id": event_id}})
+    channels, ids = _as_list(channel), _as_list(event_id)
+    if channels:
+        filters.append({"terms": {"channel": channels}} if len(channels) > 1 else {"term": {"channel": channels[0]}})
+    if ids:
+        filters.append({"terms": {"event_id": ids}} if len(ids) > 1 else {"term": {"event_id": ids[0]}})
     if minutes is not None:
         filters.append({"range": {"@timestamp": {"gte": f"now-{minutes}m"}}})
     bool_q: dict = {"filter": filters}
@@ -256,10 +283,11 @@ def _os_query(channel, event_id, keywords, minutes) -> dict:
 
 def _sql_conditions(channel, event_id, keywords, minutes, *, phrase: bool):
     conds = []
-    if channel:
-        conds.append(Event.channel == channel)
-    if event_id is not None:
-        conds.append(Event.event_id == event_id)
+    channels, ids = _as_list(channel), _as_list(event_id)
+    if channels:
+        conds.append(Event.channel.in_(channels) if len(channels) > 1 else Event.channel == channels[0])
+    if ids:
+        conds.append(Event.event_id.in_(ids) if len(ids) > 1 else Event.event_id == ids[0])
     if minutes is not None:
         since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
         conds.append(Event.ts >= since)
@@ -269,8 +297,15 @@ def _sql_conditions(channel, event_id, keywords, minutes, *, phrase: bool):
     return conds
 
 
+def _title(channel: str | None, event_id: int | None) -> str | None:
+    known = CATALOG.get((family(channel), event_id)) if event_id is not None else None
+    return known.title if known else None
+
+
 def _row_to_out(r: Event) -> EventOut:
     return EventOut(
+        id=str(r.id),
+        title=_title(r.channel, r.event_id),
         timestamp=r.ts,
         channel=r.channel,
         event_id=r.event_id,
@@ -282,8 +317,11 @@ def _row_to_out(r: Event) -> EventOut:
     )
 
 
-def _src_to_out(s: dict) -> EventOut:
+def _src_to_out(hit: dict) -> EventOut:
+    s = hit["_source"]
     return EventOut(
+        id=str(hit["_id"]),
+        title=_title(s.get("channel"), s.get("event_id")),
         timestamp=s["@timestamp"],
         channel=s.get("channel", "unknown"),
         event_id=s.get("event_id"),
