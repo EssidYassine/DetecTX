@@ -1,7 +1,7 @@
 // Agrégation des sockets pour la constellation réseau : un nœud par IP distante, un « mât »
 // par port en écoute. Sans dépendance three.js (utilisé aussi par les listes).
 
-import type { NetConnection, NetScope, NetSnapshot } from "./api";
+import type { NetConnection, NetScope, NetSnapshot, PortExposure } from "./api";
 
 export interface NetNode {
   ip: string;
@@ -78,3 +78,6 @@ export function hash32(text: string): number {
 }
 
 export const SCOPE_LABEL: Record<NetScope, string> = { public: "Internet", private: "réseau local", other: "autre" };
+
+/** Identité d'un port exposé : protocole + numéro + processus (v4 et v6 regroupés côté API). */
+export const portKey = (p: Pick<PortExposure, "proto" | "port" | "pid">) => `${p.proto}:${p.port}:${p.pid ?? ""}`;

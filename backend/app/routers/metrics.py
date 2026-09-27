@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from app.deps import get_current_user, require_role
 from app.models.user import Role, User
+from app.services import firewall
 from app.services import metrics as svc
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
@@ -38,6 +39,12 @@ def connections(_: User = Depends(get_current_user)) -> dict:
         return svc.connections()
     except svc.KillError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
+
+
+@router.get("/exposure")
+def exposure(_: User = Depends(get_current_user)) -> dict:
+    """Ports en écoute × règles du pare-feu Windows : ce qui est réellement joignable, et le risque."""
+    return firewall.exposure()
 
 
 @router.post("/processes/{pid}/kill")

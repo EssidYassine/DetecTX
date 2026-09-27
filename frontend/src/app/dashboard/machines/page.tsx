@@ -5,14 +5,16 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   closeProcess,
   fetchConnections,
+  fetchExposure,
   fetchMetrics,
   fetchProcesses,
   killProcess,
   type Metrics,
+  type ExposureSnapshot,
   type NetSnapshot,
   type ProcInfo,
 } from "@/lib/api";
-import { diffNetwork, diffProcesses, pushEvents, type ActivityEvent } from "@/lib/activity";
+import { diffExposure, diffNetwork, diffProcesses, pushEvents, type ActivityEvent } from "@/lib/activity";
 import { fmtBytes, fmtUptime } from "@/lib/host";
 import { aggregateNodes, aggregatePorts } from "@/lib/netmap";
 import { buildTree, hintsFor } from "@/lib/proctree";
@@ -25,16 +27,19 @@ import { AppsPanel } from "@/components/system/apps-panel";
 import { LineagePanel } from "@/components/system/lineage-panel";
 import { ActivityFeed } from "@/components/system/activity-feed";
 import { ConnectionsPanel, NetworkMapPanel } from "@/components/system/network-panels";
+import { PortsPanel, RampartPanel } from "@/components/system/ports-panels";
 
 const METRICS_MS = 2000;
 const PROCESSES_MS = 3000; // instantané natif (~15 ms côté backend)
 const NETWORK_MS = 5000;
+const EXPOSURE_MS = 15000; // règles du pare-feu mises en cache 15 s côté backend
 const CITY_SIZE = 60; // = MAX_BUILDINGS de la ville 3D
 
 const VIEWS = [
   { key: "ressources", label: "Ressources" },
   { key: "reseau", label: "Réseau" },
   { key: "processus", label: "Processus & activité" },
+  { key: "ports", label: "Ports & pare-feu" },
 ] as const;
 type View = (typeof VIEWS)[number]["key"];
 
@@ -44,11 +49,17 @@ const GRID = "grid gap-4 lg:h-[calc(100dvh-13.75rem)] lg:min-h-[520px] lg:grid-c
 /**
  * Exécute `task` tout de suite puis à intervalle, en sautant les tours où l'onglet est caché ;
  * rafraîchit immédiatement au retour sur l'onglet (pas de données périmées pendant `ms`).
+ * Jamais deux requêtes simultanées : un tour est sauté tant que le précédent n'a pas répondu.
  */
 function usePolling(task: () => Promise<void>, ms: number) {
   useEffect(() => {
+    let inFlight = false;
     const run = () => {
-      if (document.visibilityState === "visible") void task();
+      if (inFlight || document.visibilityState !== "visible") return;
+      inFlight = true;
+      void task().finally(() => {
+        inFlight = false;
+      });
     };
     const first = window.setTimeout(run, 0);
     const id = window.setInterval(run, ms);
@@ -83,6 +94,8 @@ function MachinesView() {
   const [selected, setSelected] = useState<number | null>(null);
   const [highlight, setHighlight] = useState<number | null>(null);
   const [selectedIp, setSelectedIp] = useState<string | null>(null);
+  const [exposure, setExposure] = useState<ExposureSnapshot | null>(null);
+  const [selectedPort, setSelectedPort] = useState<string | null>(null);
   const [highlightIp, setHighlightIp] = useState<string | null>(null);
   const [busy, setBusy] = useState<ProcAction | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -92,6 +105,7 @@ function MachinesView() {
   // Instantanés précédents : base des différences du journal d'activité.
   const prevProcs = useRef<ProcInfo[] | null>(null);
   const prevNet = useRef<NetSnapshot | null>(null);
+  const prevExposure = useRef<ExposureSnapshot | null>(null);
 
   const loadMetrics = useCallback(async () => {
     try {
@@ -138,15 +152,29 @@ function MachinesView() {
     }
   }, []);
 
+  const loadExposure = useCallback(async () => {
+    try {
+      const next = await fetchExposure();
+      const prev = prevExposure.current;
+      prevExposure.current = next;
+      if (prev) setEvents((log) => pushEvents(log, diffExposure(prev, next, Date.now())));
+      setExposure(next);
+    } catch {
+      // Exposition indisponible : la vue garde le dernier relevé.
+    }
+  }, []);
+
   usePolling(loadMetrics, METRICS_MS);
   usePolling(loadProcs, PROCESSES_MS);
   usePolling(loadNet, NETWORK_MS);
+  usePolling(loadExposure, EXPOSURE_MS);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       setSelected(null);
       setSelectedIp(null);
+      setSelectedPort(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -219,7 +247,8 @@ function MachinesView() {
   };
 
   const established = net?.connections.filter((c) => c.status === "ESTABLISHED").length;
-  const exposed = ports.filter((p) => p.exposed).length;
+  // « Joignables » = liés au réseau ET autorisés par le pare-feu (et non simplement liés à 0.0.0.0).
+  const reachable = exposure ? exposure.summary.open : null;
 
   return (
     <>
@@ -252,7 +281,7 @@ function MachinesView() {
           <Stat label="Uptime" value={m ? fmtUptime(m.uptime_seconds) : "—"} />
           <Stat label="Processus" value={m?.process_count ?? "—"} />
           <Stat label="Connexions" value={established ?? "—"} />
-          <Stat label="Ports exposés" value={net ? exposed : "—"} tone={exposed > 0 ? "warn" : undefined} />
+          <Stat label="Ports joignables" value={reachable ?? "—"} tone={reachable ? "warn" : undefined} />
           <Stat label="Réseau" value={m ? `↓ ${fmtBytes(m.net_down)}/s · ↑ ${fmtBytes(m.net_up)}/s` : "—"} />
         </div>
       </div>
@@ -284,6 +313,19 @@ function MachinesView() {
             actions={actions}
             now={now}
             className="h-[28rem] lg:col-span-4 lg:h-auto"
+          />
+        </div>
+      )}
+
+      {view === "ports" && (
+        <div className={GRID}>
+          <RampartPanel snapshot={exposure} selected={selectedPort} onSelect={setSelectedPort} className="h-96 lg:col-span-8 lg:h-auto" />
+          <PortsPanel
+            snapshot={exposure}
+            selected={selectedPort}
+            onSelect={setSelectedPort}
+            onOpenProcess={openProcess}
+            className="h-[32rem] lg:col-span-4 lg:h-auto"
           />
         </div>
       )}

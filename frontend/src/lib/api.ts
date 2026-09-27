@@ -448,6 +448,56 @@ export interface NetSnapshot {
   timestamp: string;
 }
 
+export type RiskLevel = "info" | "low" | "medium" | "high" | "critical";
+/** open : joignable depuis le réseau ; blocked : lié au réseau mais bloqué par le pare-feu. */
+export type PortVerdict = "open" | "blocked" | "local" | "unknown";
+export type PortScope = "any" | "local_subnet" | "restricted";
+
+export interface FirewallRuleRef {
+  name: string;
+  action: "allow" | "block";
+  profiles: string[];
+  remote: string;
+  by: "programme" | "service" | "port";
+  group: string;
+  interfaces: string[];
+}
+
+export interface PortExposure {
+  proto: "tcp" | "udp";
+  port: number;
+  pid: number | null;
+  process: string | null;
+  exe: string | null;
+  binds: string[];
+  verdict: PortVerdict;
+  scope: PortScope | null;
+  reason: string;
+  rules: FirewallRuleRef[];
+  risk: { level: RiskLevel; service: string; why: string; attack: string; advice: string[] };
+}
+
+export interface ExposureSnapshot {
+  available: boolean;
+  error: string | null;
+  profiles: {
+    active: string[];
+    states: Record<string, { enabled: boolean | null; default_inbound: "block" | "allow" | null; block_all: boolean | null }>;
+  };
+  networks: { name: string; category: string }[];
+  rules_count: number;
+  ports: PortExposure[];
+  summary: Record<PortVerdict | RiskLevel, number>;
+  timestamp: string;
+}
+
+/** Ports en écoute croisés avec les règles du pare-feu Windows (lecture seule). */
+export async function fetchExposure(): Promise<ExposureSnapshot> {
+  const res = await fetch(`${API_URL}/metrics/exposure`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as ExposureSnapshot;
+}
+
 export async function fetchConnections(): Promise<NetSnapshot> {
   const res = await fetch(`${API_URL}/metrics/connections`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await readError(res));

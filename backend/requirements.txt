@@ -14,3 +14,6 @@ email-validator==2.2.0
 httpx==0.28.1
 PyYAML==6.0.2
 aiosqlite==0.20.0
+psutil==7.2.2
+# API Windows (pare-feu, services, fenêtres) : sans objet hors Windows.
+pywin32==312; sys_platform == "win32"

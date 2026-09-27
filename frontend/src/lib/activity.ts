@@ -4,7 +4,8 @@
 // vit moins longtemps qu'un intervalle de rafraîchissement n'y apparaît pas : la trace
 // exhaustive reste celle de Sysmon (événement 1) côté moteur de détection.
 
-import type { NetSnapshot, ProcInfo } from "./api";
+import type { ExposureSnapshot, NetSnapshot, ProcInfo } from "./api";
+import { portKey as exposureKey } from "./netmap";
 
 export type ActivityKind = "proc_start" | "proc_exit" | "port_open" | "port_close" | "remote_new";
 export type ActivityTone = "accent" | "warn" | "muted";
@@ -91,6 +92,33 @@ export function diffNetwork(prev: NetSnapshot, next: NetSnapshot, at: number): A
       process: c.process,
       detail: `${c.status === "SYN_SENT" ? "tente de joindre" : "connecté à"} ${c.rip}:${c.rport}`,
       tone: c.status === "SYN_SENT" ? "warn" : "accent",
+    });
+  });
+  return events;
+}
+
+/**
+ * Changements d'exposition d'un port DÉJÀ en écoute (règle de pare-feu ajoutée, retirée ou
+ * changement de réseau) : les nouveaux ports sont déjà signalés par diffNetwork.
+ */
+export function diffExposure(prev: ExposureSnapshot, next: ExposureSnapshot, at: number): ActivityEvent[] {
+  const before = new Map(prev.ports.map((p) => [exposureKey(p), p]));
+  const events: ActivityEvent[] = [];
+  next.ports.forEach((p) => {
+    const old = before.get(exposureKey(p));
+    if (!old || old.verdict === p.verdict) return;
+    const nowOpen = p.verdict === "open";
+    if (!nowOpen && old.verdict !== "open") return;
+    events.push({
+      id: `expo:${exposureKey(p)}:${at}`,
+      at,
+      kind: nowOpen ? "port_open" : "port_close",
+      pid: p.pid,
+      process: p.process,
+      detail: nowOpen
+        ? `${p.proto.toUpperCase()} ${p.port} désormais joignable depuis le réseau`
+        : `${p.proto.toUpperCase()} ${p.port} n'est plus joignable depuis le réseau`,
+      tone: nowOpen ? "warn" : "accent",
     });
   });
   return events;
