@@ -16,11 +16,13 @@ import { diffNetwork, diffProcesses, pushEvents, type ActivityEvent } from "@/li
 import { fmtBytes, fmtUptime } from "@/lib/host";
 import { aggregateNodes, aggregatePorts } from "@/lib/netmap";
 import { buildTree, hintsFor } from "@/lib/proctree";
+import { buildApps, exeKey, type AppGroup } from "@/lib/apps";
 import { CpuPanel, RamPanel, StoragePanel } from "@/components/system/hardware-panels";
 import { CityPanel } from "@/components/system/city-panel";
 import { ProcessPanel } from "@/components/system/process-panel";
 import { SelectionCard, type Notice, type ProcAction, type ProcActions } from "@/components/system/process-details";
-import { TreePanel } from "@/components/system/tree-panel";
+import { AppsPanel } from "@/components/system/apps-panel";
+import { LineagePanel } from "@/components/system/lineage-panel";
 import { ActivityFeed } from "@/components/system/activity-feed";
 import { ConnectionsPanel, NetworkMapPanel } from "@/components/system/network-panels";
 
@@ -156,6 +158,14 @@ function MachinesView() {
   const ports = useMemo(() => aggregatePorts(net), [net]);
   const cpuCount = m?.cpu_count ?? 1;
   const selectedNode = selected === null ? null : (tree?.byPid.get(selected) ?? null);
+  const apps = useMemo(() => (tree ? buildApps(tree) : []), [tree]);
+  // Vue Processus : sans sélection, on montre l'application ouverte la plus lourde.
+  const defaultApp = useMemo(
+    () => apps.filter((a) => a.category === "window").sort((a, b) => b.rss - a.rss)[0] ?? apps[0] ?? null,
+    [apps],
+  );
+  const focusNode = selectedNode ?? (defaultApp ? (defaultApp.windowOwner ?? defaultApp.primary) : null);
+  const focusApp: AppGroup | null = focusNode ? (apps.find((a) => a.key === exeKey(focusNode.proc)) ?? null) : null;
 
   const setView = (next: View) => router.replace(`${pathname}?vue=${next}`, { scroll: false });
   const onSelect = useCallback((pid: number | null) => {
@@ -306,31 +316,39 @@ function MachinesView() {
       )}
 
       {view === "processus" && (
-        <div className={GRID}>
-          <TreePanel tree={tree} cpuCount={cpuCount} selected={selected} onSelect={onSelect} className="h-[32rem] lg:col-span-8 lg:h-auto" />
-          <div className="flex min-h-0 flex-col gap-4 lg:col-span-4">
-            <div className="panel shrink-0 overflow-hidden">
-              <div className="border-b border-line px-4 py-2.5">
-                <span className="eyebrow">Processus sélectionné</span>
-              </div>
+        <div className={`${GRID} lg:grid-rows-[minmax(0,1.3fr)_minmax(0,1fr)]`}>
+          <AppsPanel
+            apps={apps}
+            cpuCount={cpuCount}
+            current={focusApp?.key ?? null}
+            onPick={(app) => onSelect((app.windowOwner ?? app.primary).proc.pid)}
+            className="h-[28rem] lg:col-span-4 lg:row-span-2 lg:h-auto"
+          />
+          <LineagePanel app={focusApp} focus={focusNode} cpuCount={cpuCount} onSelect={onSelect} className="h-80 lg:col-span-8 lg:h-auto" />
+          <div className="panel flex min-h-0 flex-col overflow-hidden lg:col-span-4">
+            <div className="border-b border-line px-4 py-2.5">
+              <span className="eyebrow">Processus sélectionné</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
               <SelectionCard
-                selected={selected}
-                node={selectedNode}
+                selected={focusNode?.proc.pid ?? selected}
+                node={focusNode}
                 cpuCount={cpuCount}
                 now={now}
                 actions={actions}
                 onSelect={onSelect}
-                emptyHint="Cliquez un processus dans l'arborescence ou dans le journal."
+                emptyHint="Choisissez une application ou un nœud de la lignée."
               />
             </div>
-            <ActivityFeed
-              events={events}
-              since={since}
-              alive={(pid) => tree?.byPid.has(pid) ?? false}
-              onSelect={onSelect}
-              className="h-80 lg:h-auto lg:flex-1"
-            />
           </div>
+          <ActivityFeed
+            events={events}
+            since={since}
+            now={now}
+            alive={(pid) => tree?.byPid.has(pid) ?? false}
+            onSelect={onSelect}
+            className="h-80 lg:col-span-4 lg:h-auto"
+          />
         </div>
       )}
     </>

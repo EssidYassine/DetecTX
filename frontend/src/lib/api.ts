@@ -363,6 +363,8 @@ export interface ProcInfo {
   /** Débit d'E/S (disque + réseau + périphériques), octets/s ; null hors Windows. */
   io_bps: number | null;
   threads: number | null;
+  /** Fenêtres d'application (barre des tâches) possédées par CE processus ; null hors Windows. */
+  windows: number | null;
 }
 
 export async function fetchMetrics(): Promise<Metrics> {

@@ -54,7 +54,7 @@ def test_top_processes_excludes_idle_and_has_details():
     procs = svc.top_processes(500)
     assert procs, "au moins un processus attendu"
     assert all(p["pid"] != 0 for p in procs)
-    assert {"ppid", "rss", "io_bps", "threads", "username", "exe", "status", "started_at"} <= procs[0].keys()
+    assert {"ppid", "rss", "io_bps", "threads", "windows", "username", "exe", "status", "started_at"} <= procs[0].keys()
     mems = [p["memory_percent"] for p in procs]
     assert mems == sorted(mems, reverse=True)
 
@@ -189,6 +189,9 @@ def test_close_sends_wm_close_to_window():
         deadline = time.monotonic() + 10
         while not svc._main_windows(proc.pid) and time.monotonic() < deadline:
             time.sleep(0.2)
+        # La fenêtre est comptée dans l'inventaire : l'UI sait quel processus la possède.
+        listed = {p["pid"]: p for p in svc.top_processes(2000)}
+        assert listed[proc.pid]["windows"] == 1
         result = svc.close_process(proc.pid, wait=5)
         assert result["windows"] >= 1 and result["exited"] is True
     finally:

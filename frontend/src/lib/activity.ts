@@ -101,3 +101,50 @@ export function pushEvents(log: ActivityEvent[], events: ActivityEvent[]): Activ
   if (events.length === 0) return log;
   return [...events, ...log].slice(0, ACTIVITY_LIMIT);
 }
+
+// ─────────────────────────────── affichage condensé
+export interface ActivityGroup {
+  id: string;
+  at: number;
+  kind: ActivityKind;
+  process: string | null;
+  pids: number[];
+  details: string[]; // détails distincts, dans l'ordre d'arrivée
+  count: number;
+  tone: ActivityTone;
+}
+
+const TONE_RANK: Record<ActivityTone, number> = { muted: 0, accent: 1, warn: 2 };
+
+/**
+ * Regroupe les événements d'un même relevé qui ont le même type et le même processus :
+ * « chrome.exe · 3 processus lancés » au lieu de trois lignes. Le ton le plus fort l'emporte.
+ */
+export function coalesce(events: ActivityEvent[]): ActivityGroup[] {
+  const groups: ActivityGroup[] = [];
+  const index = new Map<string, ActivityGroup>();
+  events.forEach((e) => {
+    const key = `${e.at}|${e.kind}|${e.process ?? ""}`;
+    const group = index.get(key);
+    if (group) {
+      group.count += 1;
+      if (e.pid !== null && !group.pids.includes(e.pid)) group.pids.push(e.pid);
+      if (!group.details.includes(e.detail)) group.details.push(e.detail);
+      if (TONE_RANK[e.tone] > TONE_RANK[group.tone]) group.tone = e.tone;
+      return;
+    }
+    const created: ActivityGroup = {
+      id: e.id,
+      at: e.at,
+      kind: e.kind,
+      process: e.process,
+      pids: e.pid !== null ? [e.pid] : [],
+      details: [e.detail],
+      count: 1,
+      tone: e.tone,
+    };
+    index.set(key, created);
+    groups.push(created);
+  });
+  return groups;
+}

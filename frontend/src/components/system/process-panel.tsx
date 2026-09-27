@@ -38,15 +38,18 @@ export function ProcessPanel({ processes, tree, cpuCount, selected, highlight, o
         <span className="text-xs text-muted">{processes ? `top ${processes.length} par mémoire` : "chargement…"}</span>
       </div>
 
-      <SelectionCard
-        selected={selected}
-        node={selected === null ? null : (tree?.byPid.get(selected) ?? null)}
-        cpuCount={cpuCount}
-        now={now}
-        actions={actions}
-        onSelect={onSelect}
-        emptyHint="Cliquez un bâtiment ou une ligne pour inspecter un processus."
-      />
+      <div className="max-h-[60%] shrink-0 overflow-y-auto border-b border-line">
+        <SelectionCard
+          selected={selected}
+          node={selected === null ? null : (tree?.byPid.get(selected) ?? null)}
+          cpuCount={cpuCount}
+          now={now}
+          actions={actions}
+          onSelect={onSelect}
+          emptyHint="Cliquez un bâtiment ou une ligne pour inspecter un processus."
+          compact
+        />
+      </div>
 
       <div ref={list} className="min-h-0 flex-1 overflow-y-auto" onMouseLeave={() => onHighlight(null)}>
         <table className="w-full text-left text-xs">

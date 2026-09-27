@@ -121,6 +121,7 @@ def _native_processes() -> list[dict]:
     raw = winproc.snapshot()
     now = time.monotonic()
     total_mem = psutil.virtual_memory().total or 1
+    windows = _app_windows()
     seen: set[tuple] = set()
     procs = []
     for r in raw:
@@ -150,6 +151,7 @@ def _native_processes() -> list[dict]:
                 "rss": r.rss,
                 "io_bps": round(io),
                 "threads": r.threads,
+                "windows": len(windows.get(r.pid, ())),
                 "username": user,
                 "exe": exe,
                 "status": "stopped" if r.suspended else "running",
@@ -181,6 +183,7 @@ def _psutil_processes() -> list[dict]:
                 "rss": mem.rss if mem else None,
                 "io_bps": None,
                 "threads": None,
+                "windows": None,
                 "username": info.get("username"),
                 "exe": info.get("exe") or None,
                 "status": info.get("status"),
@@ -366,6 +369,9 @@ def kill_process(pid: int, tree: bool = False) -> dict:
 # de la fenêtre ou « taskkill » sans /F. Le programme peut proposer d'enregistrer ou refuser.
 _WM_CLOSE = 0x0010
 _GW_OWNER = 4
+_GWL_EXSTYLE = -20
+_WS_EX_TOOLWINDOW = 0x00000080
+_DWMWA_CLOAKED = 14
 
 
 def _user32():
@@ -377,30 +383,51 @@ def _user32():
     user32.IsWindowVisible.argtypes = [wintypes.HWND]
     user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
     user32.GetWindow.restype = wintypes.HWND
+    user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.GetWindowLongW.restype = ctypes.c_long
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
     user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     return user32
 
 
-def _main_windows(pid: int) -> list:
-    """Fenêtres visibles de premier niveau (sans propriétaire) appartenant au processus.
-    Ne voit que le bureau de la session du backend : DeTecTX doit tourner dans la session
-    de l'utilisateur (pas en service Windows) pour pouvoir fermer ses fenêtres."""
+def _app_windows() -> dict[int, list]:
+    """Fenêtres « d'application » par PID, en un seul passage : visibles, de premier niveau,
+    sans propriétaire, titrées, hors barres d'outils et hors fenêtres masquées par DWM (apps
+    UWP suspendues). Ce sont les fenêtres de la barre des tâches — celles qu'on peut fermer.
+
+    Ne voit que le bureau de la session du backend : DeTecTX doit tourner dans la session de
+    l'utilisateur (pas en service Windows) pour voir et fermer ses fenêtres."""
+    if sys.platform != "win32":
+        return {}
     import ctypes
     from ctypes import wintypes
 
     user32 = _user32()
-    found = []
+    dwmapi = ctypes.WinDLL("dwmapi")
+    dwmapi.DwmGetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+    found: dict[int, list] = {}
 
     def on_window(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd) or user32.GetWindow(hwnd, _GW_OWNER):
+            return True
+        if user32.GetWindowLongW(hwnd, _GWL_EXSTYLE) & _WS_EX_TOOLWINDOW or not user32.GetWindowTextLengthW(hwnd):
+            return True
+        cloaked = wintypes.DWORD(0)
+        dwmapi.DwmGetWindowAttribute(hwnd, _DWMWA_CLOAKED, ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+        if cloaked.value:
+            return True
         owner = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-        if owner.value == pid and user32.IsWindowVisible(hwnd) and not user32.GetWindow(hwnd, _GW_OWNER):
-            found.append(hwnd)
+        found.setdefault(owner.value, []).append(hwnd)
         return True
 
     callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(on_window)
     user32.EnumWindows(callback, 0)
     return found
+
+
+def _main_windows(pid: int) -> list:
+    return _app_windows().get(pid, [])
 
 
 def close_process(pid: int, wait: float = 3.0) -> dict:
@@ -412,7 +439,11 @@ def close_process(pid: int, wait: float = 3.0) -> dict:
     name = _safe_name(target)
     windows = _main_windows(pid)
     if not windows:
-        raise KillError(409, "Ce processus n'a pas de fenêtre à fermer : utilisez « Forcer l'arrêt ».")
+        raise KillError(
+            409,
+            "Ce processus n'a pas de fenêtre : dans une application multi-processus (navigateur, "
+            "Electron…), la fenêtre appartient au processus principal.",
+        )
     user32 = _user32()
     posted = sum(1 for hwnd in windows if user32.PostMessageW(hwnd, _WM_CLOSE, 0, 0))
     if posted == 0:

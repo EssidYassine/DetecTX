@@ -62,32 +62,6 @@ function isAncestor(candidate: TreeNode, node: TreeNode | null): boolean {
   return false;
 }
 
-/** Aplatissement pour l'affichage (liste virtuelle simple), en respectant les nœuds repliés. */
-export function flatten(tree: ProcTree, collapsed: Set<number>, visible?: Set<number>): { node: TreeNode; depth: number }[] {
-  const rows: { node: TreeNode; depth: number }[] = [];
-  const walk = (node: TreeNode, depth: number) => {
-    if (visible && !visible.has(node.proc.pid)) return;
-    rows.push({ node, depth });
-    if (!collapsed.has(node.proc.pid)) node.children.forEach((c) => walk(c, depth + 1));
-  };
-  tree.roots.forEach((r) => walk(r, 0));
-  return rows;
-}
-
-/** PID correspondant à la recherche + tous leurs ancêtres (pour garder le chemin visible). */
-export function searchVisible(tree: ProcTree, query: string): Set<number> | undefined {
-  const q = query.trim().toLowerCase();
-  if (!q) return undefined;
-  const visible = new Set<number>();
-  tree.byPid.forEach((node) => {
-    const p = node.proc;
-    const hit = String(p.pid) === q || (p.name ?? "").toLowerCase().includes(q) || (p.exe ?? "").toLowerCase().includes(q);
-    if (!hit) return;
-    for (let n: TreeNode | null = node; n && !visible.has(n.proc.pid); n = n.parent) visible.add(n.proc.pid);
-  });
-  return visible;
-}
-
 // ─────────────────────────────── indices
 export interface Hint {
   id: "office-shell" | "temp-path" | "masquerade" | "svchost-parent";
