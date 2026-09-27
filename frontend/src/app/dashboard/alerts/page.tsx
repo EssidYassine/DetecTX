@@ -1,27 +1,15 @@
 "use client";
 
-import { Suspense, useCallback, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { searchAlerts, runDetection, type Alert } from "@/lib/api";
-import { SeverityBadge } from "@/components/ui";
-import { DataTable, type Column } from "@/components/data-table";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { fetchAlertStats, fetchAlertTimeline, runDetection, type Alert, type AlertStats, type TimelineDay } from "@/lib/api";
 import { AlertDrawer } from "@/components/alert-drawer";
 import { ReportButton } from "@/components/report-button";
+import { TimelinePanel, dayLabel } from "@/components/alerts/timeline-panel";
+import { TriagePanel, type AlertQuery, type Severity } from "@/components/alerts/triage-panel";
+import type { TimelineSelection } from "@/components/three/alert-timeline";
 
-const SEVERITIES = ["all", "critical", "high", "medium", "low"] as const;
-
-const COLUMNS: Column<Alert>[] = [
-  { header: "Sévérité", cell: (a) => <SeverityBadge severity={a.severity} /> },
-  { header: "Risque", cell: (a) => <span className="font-mono tabular-nums">{a.risk_score}</span> },
-  { header: "Règle", cell: (a) => a.rule_title },
-  { header: "MITRE", cell: (a) => <span className="font-mono text-xs text-accent">{a.mitre ?? "—"}</span> },
-  { header: "Canal", cell: (a) => <span className="text-xs text-muted">{a.channel ?? "—"}</span> },
-  {
-    header: "Détail",
-    className: "max-w-sm truncate text-muted",
-    cell: (a) => a.message ?? "—",
-  },
-];
+const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
 
 // useSearchParams() exige une frontière Suspense pour que Next puisse pré-rendre la page.
 export default function AlertsPage() {
@@ -32,24 +20,66 @@ export default function AlertsPage() {
   );
 }
 
+/** Jour local (AAAA-MM-JJ) -> bornes ISO [début, lendemain) pour filtrer la liste. */
+function dayWindow(iso: string) {
+  const start = new Date(`${iso}T00:00:00`);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { since: start.toISOString(), until: end.toISOString(), label: dayLabel(iso) };
+}
+
 function AlertsView() {
-  const router = useRouter();
   const sp = useSearchParams();
-  const mitre = sp.get("mitre") ?? undefined;
-  const spSev = sp.get("severity");
-  const [severity, setSeverity] = useState<(typeof SEVERITIES)[number]>(
-    (SEVERITIES as readonly string[]).includes(spSev ?? "") ? (spSev as (typeof SEVERITIES)[number]) : "all",
-  );
+  const urlSeverity = sp.get("severity");
+  const urlMitre = sp.get("mitre");
+  const fromLink = Boolean(urlSeverity || urlMitre);
+
+  // File de travail par défaut : les nouvelles ; « Toutes » si on arrive d'un lien filtré.
+  const [query, setQuery] = useState<AlertQuery>(() => ({
+    status: fromLink ? "all" : "new",
+    severity: SEVERITIES.includes(urlSeverity as Severity) ? (urlSeverity as Severity) : "all",
+    mitre: urlMitre,
+    day: null,
+    q: "",
+    page: 0,
+  }));
+  const [selection, setSelection] = useState<TimelineSelection | null>(null);
+  const [stats, setStats] = useState<AlertStats | null>(null);
+  const [days, setDays] = useState<TimelineDay[]>([]);
+  const [now, setNow] = useState(() => Date.now());
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [opened, setOpened] = useState<Alert | null>(null);
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [selected, setSelected] = useState<Alert | null>(null);
 
-  const fetchPage = useCallback(
-    (p: { offset: number; limit: number; q: string }) =>
-      searchAlerts({ ...p, severity, mitre }),
-    [severity, mitre],
-  );
+  // Compteurs + chronologie (au chargement, puis après chaque triage / détection).
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetchAlertStats().catch(() => null), fetchAlertTimeline(30).catch(() => null)]).then(([s, d]) => {
+      if (cancelled) return;
+      if (s) setStats(s);
+      if (d) setDays(d);
+      setNow(Date.now());
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
+
+  // Tout changement de filtre ramène à la première page.
+  const onQuery = useCallback((patch: Partial<AlertQuery>) => {
+    setQuery((q) => ({ ...q, page: 0, ...patch }));
+  }, []);
+  const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+
+  function onTimelineSelect(sel: TimelineSelection | null) {
+    setSelection(sel);
+    if (!sel || !days[sel.day]) {
+      onQuery({ day: null });
+      return;
+    }
+    onQuery({ day: dayWindow(days[sel.day].date), ...(sel.severity ? { severity: sel.severity } : {}) });
+  }
 
   async function handleRun() {
     setRunning(true);
@@ -57,7 +87,7 @@ function AlertsView() {
     try {
       const res = await runDetection();
       setNotice(`${res.rules_run} règles exécutées, ${res.alerts_created} nouvelle(s) alerte(s).`);
-      setRefreshKey((k) => k + 1);
+      refresh();
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Détection impossible");
     } finally {
@@ -65,26 +95,17 @@ function AlertsView() {
     }
   }
 
-  const toolbar = (
-    <div className="flex gap-1 rounded-lg bg-surface-2 p-1 text-sm">
-      {SEVERITIES.map((s) => (
-        <button
-          key={s}
-          onClick={() => setSeverity(s)}
-          className={`rounded-md px-3 py-1 capitalize transition ${
-            severity === s ? "bg-accent text-accent-fg" : "text-muted hover:text-foreground"
-          }`}
-        >
-          {s === "all" ? "Toutes" : s}
-        </button>
-      ))}
-    </div>
-  );
+  const closeDrawer = useCallback(() => setOpened(null), []);
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-lg font-semibold">Alertes de sécurité</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-lg font-semibold">Alertes de sécurité</h1>
+          <p className="truncate text-sm text-muted">
+            {notice ?? "Triez la file : prenez en charge, clôturez avec une conclusion, gardez la trace de qui a décidé."}
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <ReportButton />
           <button
@@ -97,49 +118,33 @@ function AlertsView() {
         </div>
       </div>
 
-      {mitre && (
-        <div className="flex items-center gap-2 text-sm">
-          <span className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 text-accent">
-            Filtré · MITRE {mitre}
-          </span>
-          <button onClick={() => router.push("/dashboard/alerts")} className="text-muted transition hover:text-foreground">
-            ✕ effacer
-          </button>
-        </div>
-      )}
+      {/* Desktop : tout tient dans l'écran (même calcul que l'Overview) ; seul le tableau défile. */}
+      <div className="grid gap-4 lg:h-[calc(100dvh-13.25rem)] lg:min-h-[480px] lg:grid-rows-[minmax(0,0.9fr)_minmax(0,2fr)]">
+        <TimelinePanel days={days} selection={selection} onSelect={onTimelineSelect} className="h-64 lg:h-auto" />
+        <TriagePanel
+          query={query}
+          onQuery={(patch) => {
+            if ("day" in patch && patch.day === null) setSelection(null);
+            onQuery(patch);
+          }}
+          counts={{ total: stats?.total ?? 0, byStatus: stats?.by_status ?? {} }}
+          refreshKey={refreshKey}
+          onOpen={setOpened}
+          drawerOpen={opened !== null}
+          onTriaged={refresh}
+          now={now}
+          className="h-[36rem] lg:h-auto"
+        />
+      </div>
 
-      {notice && <Notice text={notice} />}
-
-      <DataTable
-        columns={COLUMNS}
-        fetchPage={fetchPage}
-        rowKey={(a) => (a as Alert).id}
-        searchPlaceholder="Rechercher une règle / un détail…"
-        toolbar={toolbar}
-        emptyMessage="Aucune alerte. Collectez des événements puis lancez la détection."
-        refreshKey={refreshKey}
-        onRowClick={(a) => setSelected(a as Alert)}
+      <AlertDrawer
+        alert={opened}
+        onClose={closeDrawer}
+        onTriaged={(updated) => {
+          setOpened(updated);
+          refresh();
+        }}
       />
-
-      <AlertDrawer alert={selected} onClose={() => setSelected(null)} />
     </>
-  );
-}
-
-function Notice({ text }: { text: string }) {
-  const isWarn = /indisponible|impossible|opensearch|erreur/i.test(text);
-  const tone = isWarn ? "warn" : "ok";
-  return (
-    <div
-      className="flex items-start gap-3 rounded-lg border px-4 py-3 text-sm"
-      style={{
-        color: `var(--${tone})`,
-        borderColor: `color-mix(in srgb, var(--${tone}) 40%, transparent)`,
-        backgroundColor: `color-mix(in srgb, var(--${tone}) 10%, transparent)`,
-      }}
-    >
-      <span className="mt-0.5 shrink-0">{isWarn ? "⚠" : "✓"}</span>
-      <p>{text}</p>
-    </div>
   );
 }

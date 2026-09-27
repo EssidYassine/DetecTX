@@ -3,22 +3,44 @@
 import { useEffect, useState } from "react";
 import { explainAlert, type Alert, type Explanation } from "@/lib/api";
 import { SeverityBadge } from "@/components/ui";
+import { TriageActions } from "@/components/triage-actions";
 
-export function AlertDrawer({ alert, onClose }: { alert: Alert | null; onClose: () => void }) {
+export function AlertDrawer({
+  alert,
+  onClose,
+  onTriaged,
+}: {
+  alert: Alert | null;
+  onClose: () => void;
+  /** Reçoit l'alerte mise à jour après un triage (le parent rafraîchit sa liste). */
+  onTriaged?: (updated: Alert) => void;
+}) {
   const [expl, setExpl] = useState<Explanation | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // L'explication ne dépend que de l'alerte : un changement de statut ne la recharge pas.
+  const alertId = alert?.id ?? null;
   useEffect(() => {
-    if (!alert) return;
+    if (alertId === null) return;
     setExpl(null);
     setError(null);
     setLoading(true);
-    explainAlert(alert.id)
+    explainAlert(alertId)
       .then(setExpl)
       .catch((e) => setError(e instanceof Error ? e.message : "Erreur"))
       .finally(() => setLoading(false));
-  }, [alert]);
+  }, [alertId]);
+
+  // Échap ferme le tiroir.
+  useEffect(() => {
+    if (alertId === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [alertId, onClose]);
 
   return (
     <>
@@ -51,6 +73,8 @@ export function AlertDrawer({ alert, onClose }: { alert: Alert | null; onClose: 
                 ✕
               </button>
             </div>
+
+            {onTriaged && <TriageActions alert={alert} onChanged={onTriaged} />}
 
             {loading && <p className="text-sm text-muted">Analyse par l’IA…</p>}
             {error && (

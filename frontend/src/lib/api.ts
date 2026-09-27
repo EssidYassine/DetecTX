@@ -143,6 +143,9 @@ export async function searchEvents(params: {
   return (await res.json()) as EventPage;
 }
 
+export type AlertStatus = "new" | "ack" | "closed";
+export type Resolution = "true_positive" | "false_positive" | "benign";
+
 export interface Alert {
   id: number;
   rule_title: string;
@@ -151,9 +154,13 @@ export interface Alert {
   mitre: string | null;
   channel: string | null;
   event_id: number | null;
+  event_timestamp: string | null;
   message: string | null;
-  status: string;
+  status: AlertStatus;
   created_at: string;
+  resolution: Resolution | null;
+  triaged_by: string | null;
+  triaged_at: string | null;
 }
 
 export interface AlertPage {
@@ -165,6 +172,7 @@ export interface AlertStats {
   total: number;
   by_severity: Record<string, number>;
   by_mitre: Record<string, number>;
+  by_status: Partial<Record<AlertStatus, number>>;
 }
 
 export async function fetchAlerts(limit = 25): Promise<AlertPage> {
@@ -176,6 +184,9 @@ export async function searchAlerts(params: {
   limit?: number;
   severity?: string;
   mitre?: string;
+  status?: AlertStatus;
+  since?: string; // ISO 8601, inclus
+  until?: string; // ISO 8601, exclu
   q?: string;
 }): Promise<AlertPage> {
   const qs = new URLSearchParams();
@@ -183,11 +194,55 @@ export async function searchAlerts(params: {
   qs.set("limit", String(params.limit ?? 25));
   if (params.severity && params.severity !== "all") qs.set("severity", params.severity);
   if (params.mitre) qs.set("mitre", params.mitre);
+  if (params.status) qs.set("status", params.status);
+  if (params.since) qs.set("since", params.since);
+  if (params.until) qs.set("until", params.until);
   if (params.q) qs.set("q", params.q);
 
   const res = await fetch(`${API_URL}/alerts?${qs.toString()}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await readError(res));
   return (await res.json()) as AlertPage;
+}
+
+export interface TimelineDay {
+  date: string; // AAAA-MM-JJ (jour local du navigateur)
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+}
+
+/** Alertes par jour et par sévérité ; jours calculés dans le fuseau du navigateur. */
+export async function fetchAlertTimeline(days = 30): Promise<TimelineDay[]> {
+  const tz = -new Date().getTimezoneOffset(); // minutes à ajouter à UTC (UTC+2 -> 120)
+  const res = await fetch(`${API_URL}/alerts/timeline?days=${days}&tz_offset=${tz}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return ((await res.json()) as { days: TimelineDay[] }).days;
+}
+
+export interface TriageInput {
+  status: AlertStatus;
+  resolution?: Resolution; // obligatoire pour « closed », interdite sinon (règle serveur)
+}
+
+export async function triageAlert(id: number, input: TriageInput): Promise<Alert> {
+  const res = await fetch(`${API_URL}/alerts/${id}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as Alert;
+}
+
+export async function triageAlerts(ids: number[], input: TriageInput): Promise<{ updated: number; missing: number[] }> {
+  const res = await fetch(`${API_URL}/alerts/triage`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ ids, ...input }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as { updated: number; missing: number[] };
 }
 
 export async function fetchAlertStats(): Promise<AlertStats> {
