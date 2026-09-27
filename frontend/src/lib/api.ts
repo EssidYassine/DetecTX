@@ -351,7 +351,14 @@ export interface ProcInfo {
   pid: number;
   name: string | null;
   memory_percent: number;
+  /** % d'UN cœur (psutil) : peut dépasser 100 sur une machine multi-cœurs. */
   cpu_percent: number;
+  // Détails : null si l'OS refuse l'accès (processus système sans droits admin).
+  rss: number | null;
+  username: string | null;
+  exe: string | null;
+  status: string | null;
+  started_at: string | null;
 }
 
 export async function fetchMetrics(): Promise<Metrics> {

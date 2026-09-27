@@ -64,16 +64,32 @@ def snapshot() -> dict:
     }
 
 
+_PROC_ATTRS = ["pid", "name", "memory_percent", "cpu_percent", "memory_info", "username", "exe", "status", "create_time"]
+
+
 def top_processes(n: int = 8) -> list[dict]:
+    """Processus les plus gourmands en mémoire, avec les détails utiles à l'analyse :
+    chemin de l'exécutable (un binaire système lancé hors de System32 est suspect),
+    utilisateur, statut, date de démarrage. Les champs refusés par l'OS valent None."""
     procs = []
-    for p in psutil.process_iter(["pid", "name", "memory_percent", "cpu_percent"]):
+    for p in psutil.process_iter(_PROC_ATTRS, ad_value=None):
         info = p.info
+        # PID 0 (« System Idle Process ») : son « CPU » est le temps d'inactivité, pas une charge.
+        if info.get("pid") == 0:
+            continue
+        mem = info.get("memory_info")
+        started = info.get("create_time")
         procs.append(
             {
                 "pid": info.get("pid"),
                 "name": info.get("name"),
                 "memory_percent": round(info.get("memory_percent") or 0.0, 1),
                 "cpu_percent": round(info.get("cpu_percent") or 0.0, 1),
+                "rss": mem.rss if mem else None,
+                "username": info.get("username"),
+                "exe": info.get("exe") or None,
+                "status": info.get("status"),
+                "started_at": datetime.fromtimestamp(started, timezone.utc).isoformat() if started else None,
             }
         )
     procs.sort(key=lambda x: x["memory_percent"], reverse=True)

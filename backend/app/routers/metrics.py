@@ -1,12 +1,15 @@
 """Endpoints métriques système (santé + gestion des processus)."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from app.deps import get_current_user, require_role
 from app.models.user import Role, User
 from app.services import metrics as svc
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
+audit_log = logging.getLogger("detectx.audit")
 
 
 @router.get("/current")
@@ -24,10 +27,14 @@ async def processes(
 
 @router.post("/processes/{pid}/kill")
 async def kill(
-    pid: int,
-    _: User = Depends(require_role(Role.admin, Role.analyst)),
+    pid: int = Path(ge=1, le=2**31 - 1),
+    user: User = Depends(require_role(Role.admin, Role.analyst)),
 ) -> dict:
+    # Action destructive sur le poste : tracée qu'elle réussisse ou non.
     try:
-        return svc.kill_process(pid)
+        result = svc.kill_process(pid)
     except svc.KillError as e:
+        audit_log.warning("process_kill actor=%s pid=%s refused=%s", user.email, pid, e.status)
         raise HTTPException(status_code=e.status, detail=e.detail)
+    audit_log.info("process_kill actor=%s pid=%s name=%s", user.email, pid, result.get("name"))
+    return result

@@ -87,12 +87,21 @@ def principled(mat):
     return next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
 
 
-def make_material(name, base, metallic=0.0, roughness=0.5, emission=None, strength=0.0):
+def make_material(name, base, metallic=0.0, roughness=0.5, emission=None, strength=0.0, alpha=1.0):
+    """Principled BSDF compatible glTF. `alpha` < 1 -> materiau transparent (alphaMode BLEND)."""
     mat = bpy.data.materials.new(name)
     bsdf = principled(mat)
     bsdf.inputs["Base Color"].default_value = hex_to_linear(base)
     bsdf.inputs["Metallic"].default_value = metallic
     bsdf.inputs["Roughness"].default_value = roughness
+    if alpha < 1.0:
+        bsdf.inputs["Alpha"].default_value = alpha
+        for attr, value in (("surface_render_method", "BLENDED"), ("blend_method", "BLEND")):
+            try:  # 4.2+ : surface_render_method ; versions anterieures : blend_method
+                setattr(mat, attr, value)
+                break
+            except (AttributeError, TypeError):
+                continue
     if emission:
         key = "Emission Color" if "Emission Color" in bsdf.inputs else "Emission"
         bsdf.inputs[key].default_value = hex_to_linear(emission)

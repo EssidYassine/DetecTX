@@ -51,3 +51,7 @@ export function mapCores(perCore: number[] | undefined, slots = 12): CoreSlot[] 
     i < n ? { value: perCore[i], label: `Cœur ${i + 1}` } : { value: null, label: "Emplacement inactif" },
   );
 }
+
+/** Charge d'un processus en % de la machine entière (psutil donne un % d'UN cœur). */
+export const machineLoad = (cpuPercent: number, cpuCount: number): number =>
+  Math.min(100, cpuPercent / Math.max(1, cpuCount));
