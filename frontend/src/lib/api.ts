@@ -349,6 +349,7 @@ export interface Metrics {
 }
 export interface ProcInfo {
   pid: number;
+  ppid: number | null;
   name: string | null;
   memory_percent: number;
   /** % d'UN cœur (psutil) : peut dépasser 100 sur une machine multi-cœurs. */
@@ -359,6 +360,9 @@ export interface ProcInfo {
   exe: string | null;
   status: string | null;
   started_at: string | null;
+  /** Débit d'E/S (disque + réseau + périphériques), octets/s ; null hors Windows. */
+  io_bps: number | null;
+  threads: number | null;
 }
 
 export async function fetchMetrics(): Promise<Metrics> {
@@ -373,13 +377,79 @@ export async function fetchProcesses(limit = 40): Promise<ProcInfo[]> {
   return (await res.json()) as ProcInfo[];
 }
 
-export async function killProcess(pid: number): Promise<{ killed: boolean; name: string }> {
-  const res = await fetch(`${API_URL}/metrics/processes/${pid}/kill`, {
+export interface KillResult {
+  killed: boolean;
+  pid: number;
+  name: string | null;
+  tree: { pid: number; name: string | null }[];
+  failed: { pid: number; name: string | null; reason: string }[];
+}
+
+/** Arrêt forcé (TerminateProcess). `tree` : ses sous-processus aussi. */
+export async function killProcess(pid: number, options: { tree?: boolean } = {}): Promise<KillResult> {
+  const qs = options.tree ? "?tree=true" : "";
+  const res = await fetch(`${API_URL}/metrics/processes/${pid}/kill${qs}`, {
     method: "POST",
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(await readError(res));
-  return (await res.json()) as { killed: boolean; name: string };
+  return (await res.json()) as KillResult;
+}
+
+export interface CloseResult {
+  pid: number;
+  name: string | null;
+  windows: number;
+  /** false : le programme n'a pas quitté (il demande sans doute d'enregistrer). */
+  exited: boolean;
+}
+
+/** Fermeture propre : WM_CLOSE aux fenêtres du processus (comme la croix de la fenêtre). */
+export async function closeProcess(pid: number): Promise<CloseResult> {
+  const res = await fetch(`${API_URL}/metrics/processes/${pid}/close`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as CloseResult;
+}
+
+export type NetScope = "private" | "public" | "other";
+
+export interface ListeningSocket {
+  proto: "tcp" | "udp";
+  ip: string;
+  port: number;
+  pid: number | null;
+  process: string | null;
+  /** Joignable depuis le réseau (toutes interfaces ou IP non loopback). */
+  exposed: boolean;
+}
+
+export interface NetConnection {
+  proto: "tcp" | "udp";
+  lip: string;
+  lport: number;
+  rip: string;
+  rport: number;
+  status: string; // ESTABLISHED, TIME_WAIT, SYN_SENT…
+  pid: number | null;
+  process: string | null;
+  scope: NetScope;
+}
+
+export interface NetSnapshot {
+  listening: ListeningSocket[];
+  connections: NetConnection[];
+  truncated: number;
+  loopback: number;
+  timestamp: string;
+}
+
+export async function fetchConnections(): Promise<NetSnapshot> {
+  const res = await fetch(`${API_URL}/metrics/connections`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as NetSnapshot;
 }
 
 export interface Shortcut {

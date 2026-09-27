@@ -10,6 +10,7 @@ from opensearchpy.exceptions import ConnectionError as OpenSearchConnectionError
 from sqlalchemy import inspect, text
 
 from app import __version__
+from app.audit import configure_audit_log
 from app.clients import get_opensearch, get_redis
 from app.config import get_settings
 from app.db import Base, engine
@@ -35,6 +36,7 @@ from app import models  # noqa: F401
 
 logger = logging.getLogger("detectx")
 settings = get_settings()
+configure_audit_log(settings.audit_log_path)
 
 
 # Colonnes ajoutées après la création initiale des tables : create_all ne modifie pas une

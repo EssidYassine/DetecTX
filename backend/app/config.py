@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # Backend de stockage des événements : "opensearch" (défaut) ou "sql" (mode local sans Docker).
     events_backend: str = Field(default="opensearch", validation_alias="EVENTS_BACKEND")
 
+    # Journal d'audit (arrêts de processus, triages…) : fichier tournant. Vide = console seule.
+    audit_log_path: str = Field(default="logs/audit.log", validation_alias="AUDIT_LOG_PATH")
+
     # PostgreSQL
     postgres_user: str = "detectx"
     postgres_password: str = "detectx"

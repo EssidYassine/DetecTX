@@ -6,3 +6,4 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("EVENTS_BACKEND", "sql")
 os.environ.setdefault("JWT_SECRET", "test-secret-not-for-production")
+os.environ.setdefault("AUDIT_LOG_PATH", "")  # audit en console seulement : les tests n'écrivent pas le vrai journal

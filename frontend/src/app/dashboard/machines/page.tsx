@@ -1,30 +1,97 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { fetchMetrics, fetchProcesses, killProcess, type Metrics, type ProcInfo } from "@/lib/api";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import {
+  closeProcess,
+  fetchConnections,
+  fetchMetrics,
+  fetchProcesses,
+  killProcess,
+  type Metrics,
+  type NetSnapshot,
+  type ProcInfo,
+} from "@/lib/api";
+import { diffNetwork, diffProcesses, pushEvents, type ActivityEvent } from "@/lib/activity";
 import { fmtBytes, fmtUptime } from "@/lib/host";
+import { aggregateNodes, aggregatePorts } from "@/lib/netmap";
+import { buildTree, hintsFor } from "@/lib/proctree";
 import { CpuPanel, RamPanel, StoragePanel } from "@/components/system/hardware-panels";
 import { CityPanel } from "@/components/system/city-panel";
 import { ProcessPanel } from "@/components/system/process-panel";
+import { SelectionCard, type Notice, type ProcAction, type ProcActions } from "@/components/system/process-details";
+import { TreePanel } from "@/components/system/tree-panel";
+import { ActivityFeed } from "@/components/system/activity-feed";
+import { ConnectionsPanel, NetworkMapPanel } from "@/components/system/network-panels";
 
 const METRICS_MS = 2000;
-const PROCESSES_MS = 5000; // énumérer ~300 processus avec leurs détails coûte plus cher
-const PROCESS_LIMIT = 60; // = MAX_BUILDINGS de la ville 3D
+const PROCESSES_MS = 3000; // instantané natif (~15 ms côté backend)
+const NETWORK_MS = 5000;
+const CITY_SIZE = 60; // = MAX_BUILDINGS de la ville 3D
 
-type Notice = { tone: "ok" | "critical"; text: string };
+const VIEWS = [
+  { key: "ressources", label: "Ressources" },
+  { key: "reseau", label: "Réseau" },
+  { key: "processus", label: "Processus & activité" },
+] as const;
+type View = (typeof VIEWS)[number]["key"];
 
-/** Page Système — « salle des machines » : CPU, RAM, stockage et processus en 3D, sans défilement. */
+// Desktop : tout tient dans l'écran (même calcul que l'Overview) ; seules les listes défilent.
+const GRID = "grid gap-4 lg:h-[calc(100dvh-13.75rem)] lg:min-h-[520px] lg:grid-cols-12";
+
+/**
+ * Exécute `task` tout de suite puis à intervalle, en sautant les tours où l'onglet est caché ;
+ * rafraîchit immédiatement au retour sur l'onglet (pas de données périmées pendant `ms`).
+ */
+function usePolling(task: () => Promise<void>, ms: number) {
+  useEffect(() => {
+    const run = () => {
+      if (document.visibilityState === "visible") void task();
+    };
+    const first = window.setTimeout(run, 0);
+    const id = window.setInterval(run, ms);
+    document.addEventListener("visibilitychange", run);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", run);
+    };
+  }, [task, ms]);
+}
+
 export default function MachinesPage() {
+  return (
+    <Suspense fallback={null}>
+      <MachinesView />
+    </Suspense>
+  );
+}
+
+/** Page Système — « salle des machines » : ressources, réseau et processus du poste, sans défilement. */
+function MachinesView() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const view: View = VIEWS.some((v) => v.key === params.get("vue")) ? (params.get("vue") as View) : "ressources";
+
   const [m, setM] = useState<Metrics | null>(null);
   const [procs, setProcs] = useState<ProcInfo[] | null>(null);
+  const [net, setNet] = useState<NetSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [highlight, setHighlight] = useState<number | null>(null);
-  const [killing, setKilling] = useState(false);
+  const [selectedIp, setSelectedIp] = useState<string | null>(null);
+  const [highlightIp, setHighlightIp] = useState<string | null>(null);
+  const [busy, setBusy] = useState<ProcAction | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [since, setSince] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  // Instantanés précédents : base des différences du journal d'activité.
+  const prevProcs = useRef<ProcInfo[] | null>(null);
+  const prevNet = useRef<NetSnapshot | null>(null);
 
-  const tick = useCallback(async () => {
+  const loadMetrics = useCallback(async () => {
     try {
       setM(await fetchMetrics());
       setError(null);
@@ -35,121 +102,248 @@ export default function MachinesPage() {
 
   const loadProcs = useCallback(async () => {
     try {
-      setProcs(await fetchProcesses(PROCESS_LIMIT));
-      setNow(Date.now());
+      const next = await fetchProcesses(2000);
+      const at = Date.now();
+      const prev = prevProcs.current;
+      prevProcs.current = next;
+      if (prev) {
+        const tree = buildTree(next);
+        const flagged = (p: ProcInfo) => {
+          const node = tree.byPid.get(p.pid);
+          return node ? hintsFor(node).length > 0 : false;
+        };
+        setEvents((log) => pushEvents(log, diffProcesses(prev, next, at, flagged)));
+      } else {
+        setSince(at);
+      }
+      setProcs(next);
+      setNow(at);
     } catch {
-      // Liste conservée : une erreur ponctuelle ne doit pas vider la ville.
+      // Liste conservée : une erreur ponctuelle ne doit pas vider les vues.
       setProcs((p) => p ?? []);
     }
   }, []);
 
-  useEffect(() => {
-    const first = window.setTimeout(() => {
-      void tick();
-      void loadProcs();
-    }, 0);
-    const mt = window.setInterval(() => void tick(), METRICS_MS);
-    const pt = window.setInterval(() => void loadProcs(), PROCESSES_MS);
-    return () => {
-      window.clearTimeout(first);
-      window.clearInterval(mt);
-      window.clearInterval(pt);
-    };
-  }, [tick, loadProcs]);
+  const loadNet = useCallback(async () => {
+    try {
+      const next = await fetchConnections();
+      const prev = prevNet.current;
+      prevNet.current = next;
+      if (prev) setEvents((log) => pushEvents(log, diffNetwork(prev, next, Date.now())));
+      setNet(next);
+    } catch {
+      // Réseau indisponible : la vue garde le dernier relevé.
+    }
+  }, []);
+
+  usePolling(loadMetrics, METRICS_MS);
+  usePolling(loadProcs, PROCESSES_MS);
+  usePolling(loadNet, NETWORK_MS);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSelected(null);
+      if (e.key !== "Escape") return;
+      setSelected(null);
+      setSelectedIp(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const tree = useMemo(() => (procs ? buildTree(procs) : null), [procs]);
+  const top = useMemo(() => procs?.slice(0, CITY_SIZE) ?? null, [procs]);
+  const nodes = useMemo(() => aggregateNodes(net), [net]);
+  const ports = useMemo(() => aggregatePorts(net), [net]);
+  const cpuCount = m?.cpu_count ?? 1;
+  const selectedNode = selected === null ? null : (tree?.byPid.get(selected) ?? null);
+
+  const setView = (next: View) => router.replace(`${pathname}?vue=${next}`, { scroll: false });
   const onSelect = useCallback((pid: number | null) => {
     setSelected(pid);
     setNotice(null);
   }, []);
+  const openProcess = (pid: number) => {
+    onSelect(pid);
+    setView("processus");
+  };
 
-  async function onKill(p: ProcInfo) {
-    const label = p.name ?? `PID ${p.pid}`;
-    if (!window.confirm(`Terminer le processus « ${label} » (PID ${p.pid}) ?\n\nLes données non enregistrées de ce programme seront perdues.`)) return;
-    setKilling(true);
+  async function runAction(action: ProcAction, p: ProcInfo, work: () => Promise<Notice>) {
+    setBusy(action);
+    setNotice(null);
     try {
-      await killProcess(p.pid);
-      setSelected(null);
-      setNotice({ tone: "ok", text: `« ${label} » (PID ${p.pid}) a été terminé.` });
+      const result = await work();
       await loadProcs();
+      setNotice(result);
     } catch (e) {
-      setNotice({ tone: "critical", text: e instanceof Error ? e.message : "Échec de l'arrêt du processus." });
+      setNotice({ tone: "critical", text: e instanceof Error ? e.message : "Action impossible." });
     } finally {
-      setKilling(false);
+      setBusy(null);
     }
   }
 
-  const cpuCount = m?.cpu_count ?? 1;
+  const actions: ProcActions = {
+    busy,
+    notice,
+    onClose: (p) =>
+      void runAction("close", p, async () => {
+        const label = p.name ?? `PID ${p.pid}`;
+        const r = await closeProcess(p.pid);
+        if (r.exited) {
+          setSelected(null);
+          return { tone: "ok", text: `« ${label} » s'est fermé normalement.` };
+        }
+        return {
+          tone: "warn",
+          text: `Fermeture demandée à ${r.windows} fenêtre${r.windows > 1 ? "s" : ""} : « ${label} » attend sans doute une réponse sur le bureau (enregistrer ?).`,
+        };
+      }),
+    onKill: (p, withTree) =>
+      void runAction("kill", p, async () => {
+        const label = p.name ?? `PID ${p.pid}`;
+        const r = await killProcess(p.pid, { tree: withTree });
+        setSelected(null);
+        const extra = r.tree.length - 1;
+        const failed = r.failed.length > 0 ? ` ${r.failed.length} sous-processus n'ont pas pu être arrêtés (accès refusé).` : "";
+        return { tone: failed ? "warn" : "ok", text: `« ${label} » arrêté${extra > 0 ? ` avec ${extra} sous-processus` : ""}.${failed}` };
+      }),
+  };
+
+  const established = net?.connections.filter((c) => c.status === "ESTABLISHED").length;
+  const exposed = ports.filter((p) => p.exposed).length;
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="relative flex h-2 w-2 shrink-0">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-60" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
-          </span>
-          <div className="min-w-0">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2.5">
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-60" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
+            </span>
             <h1 className="text-lg font-semibold">
               Salle des machines <span className="font-mono text-base font-normal text-muted">· {m?.hostname ?? "—"}</span>
             </h1>
-            <p className="truncate text-sm text-muted">Supervision temps réel du poste · métriques toutes les 2 s, processus toutes les 5 s</p>
+          </div>
+          <div className="mt-1.5 flex gap-1" role="tablist" aria-label="Vues du système">
+            {VIEWS.map((v) => (
+              <button
+                key={v.key}
+                role="tab"
+                aria-selected={view === v.key}
+                onClick={() => setView(v.key)}
+                className={`rounded-lg px-3 py-1 text-sm transition ${view === v.key ? "bg-accent/15 text-accent" : "text-muted hover:text-foreground"}`}
+              >
+                {v.label}
+              </button>
+            ))}
           </div>
         </div>
         <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 text-xs">
           <Stat label="Uptime" value={m ? fmtUptime(m.uptime_seconds) : "—"} />
           <Stat label="Processus" value={m?.process_count ?? "—"} />
-          <Stat label="Réseau ↓" value={m ? `${fmtBytes(m.net_down)}/s` : "—"} />
-          <Stat label="Réseau ↑" value={m ? `${fmtBytes(m.net_up)}/s` : "—"} />
+          <Stat label="Connexions" value={established ?? "—"} />
+          <Stat label="Ports exposés" value={net ? exposed : "—"} tone={exposed > 0 ? "warn" : undefined} />
+          <Stat label="Réseau" value={m ? `↓ ${fmtBytes(m.net_down)}/s · ↑ ${fmtBytes(m.net_up)}/s` : "—"} />
         </div>
       </div>
 
       {error && <p className="rounded-md border border-critical/40 bg-critical/10 px-3 py-2 text-sm text-critical">{error}</p>}
 
-      {/* Desktop : tout tient dans l'écran (même calcul que l'Overview) ; seule la liste des processus défile. */}
-      <div className="grid gap-4 lg:h-[calc(100dvh-13.25rem)] lg:min-h-[520px] lg:grid-cols-12 lg:grid-rows-[minmax(0,1fr)_minmax(0,1.35fr)]">
-        <CpuPanel metrics={m} className="h-64 lg:col-span-4 lg:h-auto" />
-        <RamPanel metrics={m} className="h-64 lg:col-span-4 lg:h-auto" />
-        <StoragePanel metrics={m} className="h-64 lg:col-span-4 lg:h-auto" />
-        <CityPanel
-          processes={procs ?? []}
-          cpuCount={cpuCount}
-          selected={selected}
-          highlight={highlight}
-          onHighlight={setHighlight}
-          onSelect={onSelect}
-          className="h-80 lg:col-span-8 lg:h-auto"
-        />
-        <ProcessPanel
-          processes={procs}
-          cpuCount={cpuCount}
-          selected={selected}
-          highlight={highlight}
-          onHighlight={setHighlight}
-          onSelect={onSelect}
-          onKill={onKill}
-          killing={killing}
-          notice={notice}
-          now={now}
-          className="h-[28rem] lg:col-span-4 lg:h-auto"
-        />
-      </div>
+      {view === "ressources" && (
+        <div className={`${GRID} lg:grid-rows-[minmax(0,1fr)_minmax(0,1.35fr)]`}>
+          <CpuPanel metrics={m} className="h-64 lg:col-span-4 lg:h-auto" />
+          <RamPanel metrics={m} className="h-64 lg:col-span-4 lg:h-auto" />
+          <StoragePanel metrics={m} className="h-64 lg:col-span-4 lg:h-auto" />
+          <CityPanel
+            processes={top ?? []}
+            cpuCount={cpuCount}
+            selected={selected}
+            highlight={highlight}
+            onHighlight={setHighlight}
+            onSelect={onSelect}
+            className="h-80 lg:col-span-8 lg:h-auto"
+          />
+          <ProcessPanel
+            processes={top}
+            tree={tree}
+            cpuCount={cpuCount}
+            selected={selected}
+            highlight={highlight}
+            onHighlight={setHighlight}
+            onSelect={onSelect}
+            actions={actions}
+            now={now}
+            className="h-[28rem] lg:col-span-4 lg:h-auto"
+          />
+        </div>
+      )}
+
+      {view === "reseau" && (
+        <div className={GRID}>
+          <NetworkMapPanel
+            nodes={nodes}
+            ports={ports}
+            snapshot={net}
+            selected={selectedIp}
+            highlight={highlightIp}
+            throughput={(m?.net_up ?? 0) + (m?.net_down ?? 0)}
+            onHighlight={setHighlightIp}
+            onSelect={setSelectedIp}
+            className="h-96 lg:col-span-8 lg:h-auto"
+          />
+          <ConnectionsPanel
+            snapshot={net}
+            nodes={nodes}
+            ports={ports}
+            selected={selectedIp}
+            highlight={highlightIp}
+            onHighlight={setHighlightIp}
+            onSelect={setSelectedIp}
+            onOpenProcess={openProcess}
+            className="h-[28rem] lg:col-span-4 lg:h-auto"
+          />
+        </div>
+      )}
+
+      {view === "processus" && (
+        <div className={GRID}>
+          <TreePanel tree={tree} cpuCount={cpuCount} selected={selected} onSelect={onSelect} className="h-[32rem] lg:col-span-8 lg:h-auto" />
+          <div className="flex min-h-0 flex-col gap-4 lg:col-span-4">
+            <div className="panel shrink-0 overflow-hidden">
+              <div className="border-b border-line px-4 py-2.5">
+                <span className="eyebrow">Processus sélectionné</span>
+              </div>
+              <SelectionCard
+                selected={selected}
+                node={selectedNode}
+                cpuCount={cpuCount}
+                now={now}
+                actions={actions}
+                onSelect={onSelect}
+                emptyHint="Cliquez un processus dans l'arborescence ou dans le journal."
+              />
+            </div>
+            <ActivityFeed
+              events={events}
+              since={since}
+              alive={(pid) => tree?.byPid.has(pid) ?? false}
+              onSelect={onSelect}
+              className="h-80 lg:h-auto lg:flex-1"
+            />
+          </div>
+        </div>
+      )}
     </>
   );
 }
 
-function Stat({ label, value }: { label: string; value: ReactNode }) {
+function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: string }) {
   return (
     <span className="flex items-baseline gap-1.5">
       <span className="eyebrow">{label}</span>
-      <span className="font-mono tabular-nums">{value}</span>
+      <span className="font-mono tabular-nums" style={tone ? { color: `var(--${tone})` } : undefined}>
+        {value}
+      </span>
     </span>
   );
 }
