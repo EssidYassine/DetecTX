@@ -11,7 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from app.deps import get_current_user, require_role
 from app.models.user import Role, User
-from app.services import firewall
+from app.schemas.firewall import BlockRequest, UnblockRequest
+from app.services import firewall, firewall_actions
 from app.services import metrics as svc
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
@@ -81,4 +82,30 @@ def close(
         "process_close actor=%s pid=%s name=%s windows=%s exited=%s",
         user.email, pid, result["name"], result["windows"], result["exited"],
     )
+    return result
+
+
+# ─────────────────────────────── pare-feu (phase B) : admin DeTecTX + invite UAC Windows
+@router.post("/firewall/block")
+def firewall_block(body: BlockRequest, user: User = Depends(require_role(Role.admin))) -> dict:
+    """Bloque l'entrant sur des ports (règles du groupe DeTecTX). Une seule invite UAC s'affiche."""
+    targets = [(t.proto, t.port) for t in body.targets]
+    try:
+        result = firewall_actions.block(targets, list(body.profiles))
+    except firewall_actions.ActionError as e:
+        audit_log.warning("firewall_block actor=%s targets=%s profiles=%s refused=%s", user.email, targets, body.profiles, e.status)
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    audit_log.info("firewall_block actor=%s targets=%s profiles=%s rules=%s", user.email, targets, body.profiles, result["rules"])
+    return result
+
+
+@router.post("/firewall/unblock")
+def firewall_unblock(body: UnblockRequest, user: User = Depends(require_role(Role.admin))) -> dict:
+    """Retire une règle de blocage DeTecTX (et seulement une règle DeTecTX)."""
+    try:
+        result = firewall_actions.unblock(body.name)
+    except firewall_actions.ActionError as e:
+        audit_log.warning("firewall_unblock actor=%s rule=%r refused=%s", user.email, body.name, e.status)
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    audit_log.info("firewall_unblock actor=%s rule=%r", user.email, body.name)
     return result

@@ -15,12 +15,12 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Html, PerspectiveCamera, useGLTF } from "@react-three/drei";
+import { useFrame, type ThreeEvent } from "@react-three/fiber";
+import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { PortExposure, RiskLevel } from "@/lib/api";
 import { portKey } from "@/lib/netmap";
-import { Stage, useScene, type Palette } from "./scene-kit";
+import { FitCamera, ringPoints, Stage, useScene, type Palette } from "./scene-kit";
 
 const MODEL_URL = "/models/rampart.glb";
 useGLTF.preload(MODEL_URL);
@@ -70,24 +70,11 @@ interface Item {
   local: boolean;
 }
 
+// Enveloppe : plateau (r 3.5), sommet de l'enceinte, étiquettes au-dessus des portes avant.
+const VIEW_POINTS = [...ringPoints(3.55, 0), ...ringPoints(WALL_R, GROUND_TOP + WALL_H), ...ringPoints(WALL_R + 0.55, GROUND_TOP + WALL_H + 0.5, 16)];
+
 function RampartCamera() {
-  const size = useThree((s) => s.size);
-  const aspect = size.width / Math.max(1, size.height);
-  const fov = 32;
-  const half = THREE.MathUtils.degToRad(fov / 2);
-  // Emprise : plateau de rayon 3.5 vu à ~50° + étiquettes au-dessus des portes avant.
-  const dist = Math.max(3.85 / (Math.tan(half) * aspect), 2.95 / Math.tan(half));
-  const dir = new THREE.Vector3(0, 0.78, 0.63).normalize();
-  return (
-    <PerspectiveCamera
-      makeDefault
-      fov={fov}
-      near={0.1}
-      far={80}
-      position={[dir.x * dist, 0.15 + dir.y * dist, 0.2 + dir.z * dist]}
-      onUpdate={(cam) => cam.lookAt(0, 0.15, 0.2)}
-    />
-  );
+  return <FitCamera points={VIEW_POINTS} direction={[0, 0.78, 0.63]} fov={32} />;
 }
 
 const _m = new THREE.Matrix4();

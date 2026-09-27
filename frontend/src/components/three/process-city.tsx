@@ -14,13 +14,13 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Html, PerspectiveCamera, useGLTF } from "@react-three/drei";
+import { useFrame, type ThreeEvent } from "@react-three/fiber";
+import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { ProcInfo } from "@/lib/api";
 import { loadTone, machineLoad } from "@/lib/host";
 import { squarify } from "@/lib/treemap";
-import { Stage, useScene } from "./scene-kit";
+import { boxPoints, FitCamera, Stage, useScene } from "./scene-kit";
 
 const MODEL_URL = "/models/city.glb";
 useGLTF.preload(MODEL_URL);
@@ -90,24 +90,11 @@ function layout(processes: ProcInfo[], cpuCount: number): Building[] {
   });
 }
 
+// Enveloppe : plateau (6.4 x 4.2) et hauteur usuelle des bâtiments + étiquette de sélection.
+const VIEW_POINTS = [...boxPoints(3.2, 2.1, 0, 0.12), ...boxPoints(GROUND_W / 2, GROUND_D / 2, GROUND_TOP, 1.3)];
+
 function CityCamera() {
-  const size = useThree((s) => s.size);
-  const aspect = size.width / Math.max(1, size.height);
-  const fov = 32;
-  const half = THREE.MathUtils.degToRad(fov / 2);
-  // Emprise : plateau 6.4 x 4.2 vu à ~40° + bâtiments les plus hauts (~1.8).
-  const dist = Math.max(3.4 / (Math.tan(half) * aspect), 1.85 / Math.tan(half));
-  const dir = new THREE.Vector3(0, 0.62, 0.78).normalize();
-  return (
-    <PerspectiveCamera
-      makeDefault
-      fov={fov}
-      near={0.1}
-      far={80}
-      position={[dir.x * dist, 0.4 + dir.y * dist, 0.1 + dir.z * dist]}
-      onUpdate={(cam) => cam.lookAt(0, 0.4, 0.1)}
-    />
-  );
+  return <FitCamera points={VIEW_POINTS} direction={[0, 0.72, 0.7]} fov={32} />;
 }
 
 const _m = new THREE.Matrix4();

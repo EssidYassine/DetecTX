@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 import psutil
 
 from app.detection.port_risk import LEVELS, assess
-from app.services import metrics
+from app.services import fw_helper, metrics
 
 PROFILE_BITS = {1: "domain", 2: "private", 4: "public"}
 _PROTO_NUM = {"tcp": 6, "udp": 17}
@@ -413,6 +413,18 @@ def exposure() -> dict:
         },
         "networks": state.networks,
         "rules_count": len(state.rules),
+        # Blocages posés par DeTecTX (groupe dédié) : ce sont les seuls que l'UI peut retirer.
+        "detectx_rules": [
+            {
+                "name": r.name,
+                "proto": {6: "tcp", 17: "udp"}.get(r.protocol, "any"),
+                "ports": [p for lo, hi in r.ports for p in range(lo, hi + 1)][:20],
+                "profiles": [name for bit, name in PROFILE_BITS.items() if r.profiles & bit],
+            }
+            for r in state.rules
+            if r.group == fw_helper.GROUP and not r.allow
+        ],
+        "elevated": sys.platform == "win32" and fw_helper.is_admin(),
         "ports": ports,
         "summary": summary,
         "timestamp": datetime.now(timezone.utc).isoformat(),

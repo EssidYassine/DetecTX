@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
+  blockPorts,
   closeProcess,
   fetchConnections,
   fetchExposure,
@@ -11,8 +12,10 @@ import {
   killProcess,
   type Metrics,
   type ExposureSnapshot,
+  type FirewallProfile,
   type NetSnapshot,
   type ProcInfo,
+  unblockRule,
 } from "@/lib/api";
 import { diffExposure, diffNetwork, diffProcesses, pushEvents, type ActivityEvent } from "@/lib/activity";
 import { fmtBytes, fmtUptime } from "@/lib/host";
@@ -27,7 +30,7 @@ import { AppsPanel } from "@/components/system/apps-panel";
 import { LineagePanel } from "@/components/system/lineage-panel";
 import { ActivityFeed } from "@/components/system/activity-feed";
 import { ConnectionsPanel, NetworkMapPanel } from "@/components/system/network-panels";
-import { PortsPanel, RampartPanel } from "@/components/system/ports-panels";
+import { PortsPanel, RampartPanel, type FirewallActions } from "@/components/system/ports-panels";
 
 const METRICS_MS = 2000;
 const PROCESSES_MS = 3000; // instantané natif (~15 ms côté backend)
@@ -96,6 +99,8 @@ function MachinesView() {
   const [selectedIp, setSelectedIp] = useState<string | null>(null);
   const [exposure, setExposure] = useState<ExposureSnapshot | null>(null);
   const [selectedPort, setSelectedPort] = useState<string | null>(null);
+  const [fwBusy, setFwBusy] = useState<FirewallActions["busy"]>(null);
+  const [fwNotice, setFwNotice] = useState<FirewallActions["notice"]>(null);
   const [highlightIp, setHighlightIp] = useState<string | null>(null);
   const [busy, setBusy] = useState<ProcAction | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -246,6 +251,36 @@ function MachinesView() {
       }),
   };
 
+  // Pare-feu : chaque action passe par l'invite UAC de Windows ; on relit l'exposition ensuite.
+  async function runFirewall(kind: "block" | "unblock", work: () => Promise<string>) {
+    setFwBusy(kind);
+    setFwNotice(null);
+    try {
+      const text = await work();
+      setFwNotice({ tone: "ok", text });
+    } catch (e) {
+      setFwNotice({ tone: "critical", text: e instanceof Error ? e.message : "Modification du pare-feu impossible." });
+    } finally {
+      setFwBusy(null);
+      await loadExposure();
+    }
+  }
+
+  const firewallActions: FirewallActions = {
+    busy: fwBusy,
+    notice: fwNotice,
+    onBlock: (targets, profiles: FirewallProfile[]) =>
+      void runFirewall("block", async () => {
+        const r = await blockPorts(targets, profiles);
+        return `${r.rules.length} blocage(s) ajouté(s) au pare-feu Windows : ${targets.map((t) => `${t.proto.toUpperCase()} ${t.port}`).join(", ")}.`;
+      }),
+    onUnblock: (name) =>
+      void runFirewall("unblock", async () => {
+        await unblockRule(name);
+        return `Blocage retiré : « ${name} ».`;
+      }),
+  };
+
   const established = net?.connections.filter((c) => c.status === "ESTABLISHED").length;
   // « Joignables » = liés au réseau ET autorisés par le pare-feu (et non simplement liés à 0.0.0.0).
   const reachable = exposure ? exposure.summary.open : null;
@@ -325,6 +360,7 @@ function MachinesView() {
             selected={selectedPort}
             onSelect={setSelectedPort}
             onOpenProcess={openProcess}
+            actions={firewallActions}
             className="h-[32rem] lg:col-span-4 lg:h-auto"
           />
         </div>

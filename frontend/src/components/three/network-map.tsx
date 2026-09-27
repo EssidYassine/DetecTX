@@ -14,11 +14,11 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Html, PerspectiveCamera, useGLTF } from "@react-three/drei";
+import { useFrame, type ThreeEvent } from "@react-three/fiber";
+import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { hash32, MAX_NODES, MAX_PORTS, type NetNode, type PortNode } from "@/lib/netmap";
-import { Stage, useScene, type Palette } from "./scene-kit";
+import { FitCamera, ringPoints, Stage, useScene, type Palette } from "./scene-kit";
 
 const MODEL_URL = "/models/netmap.glb";
 useGLTF.preload(MODEL_URL);
@@ -92,23 +92,11 @@ function nodeColor(palette: Palette, node: NetNode): THREE.Color {
   return node.scope === "public" ? palette.accent : LAN_COLOR;
 }
 
+// Enveloppe : plateau (r 3.4), arcs au-dessus du moyeu, étiquettes des nœuds Internet.
+const VIEW_POINTS = [...ringPoints(3.45, 0), ...ringPoints(1.4, 1.35, 12), ...ringPoints(RING_WAN + 0.2, NODE_Y + 0.4, 16)];
+
 function NetCamera() {
-  const size = useThree((s) => s.size);
-  const aspect = size.width / Math.max(1, size.height);
-  const fov = 32;
-  const half = THREE.MathUtils.degToRad(fov / 2);
-  const dist = Math.max(3.6 / (Math.tan(half) * aspect), 2.35 / Math.tan(half));
-  const dir = new THREE.Vector3(0, 0.74, 0.67).normalize();
-  return (
-    <PerspectiveCamera
-      makeDefault
-      fov={fov}
-      near={0.1}
-      far={80}
-      position={[dir.x * dist, 0.3 + dir.y * dist, dir.z * dist]}
-      onUpdate={(cam) => cam.lookAt(0, 0.3, 0)}
-    />
-  );
+  return <FitCamera points={VIEW_POINTS} direction={[0, 0.74, 0.67]} fov={32} />;
 }
 
 const _m = new THREE.Matrix4();

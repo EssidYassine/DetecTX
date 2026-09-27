@@ -14,13 +14,13 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Html, PerspectiveCamera, useGLTF } from "@react-three/drei";
+import { useFrame, type ThreeEvent } from "@react-three/fiber";
+import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { machineLoad } from "@/lib/host";
 import { LANE_TITLES, type Lineage, type LineageNode } from "@/lib/lineage";
 import { hintsFor } from "@/lib/proctree";
-import { Stage, useScene, type Palette } from "./scene-kit";
+import { boxPoints, FitCamera, Stage, useScene, type Palette } from "./scene-kit";
 
 const MODEL_URL = "/models/lineage.glb";
 useGLTF.preload(MODEL_URL);
@@ -75,24 +75,11 @@ function bezier(out: THREE.Vector3, a: THREE.Vector3, c: THREE.Vector3, b: THREE
   );
 }
 
+// Enveloppe : plateau (8 x 3.9) et nœuds + étiquettes au-dessus des couloirs.
+const VIEW_POINTS = [...boxPoints(4.0, 1.95, 0, 0.13), ...boxPoints(3.4, 1.3, NODE_Y, NODE_Y + 0.5)];
+
 function LineageCamera() {
-  const size = useThree((s) => s.size);
-  const aspect = size.width / Math.max(1, size.height);
-  const fov = 30;
-  const half = THREE.MathUtils.degToRad(fov / 2);
-  // Emprise : plateau 8 x 3.9 vu à ~53° + titres des couloirs devant le plateau.
-  const dist = Math.max(4.15 / (Math.tan(half) * aspect), 1.8 / Math.tan(half));
-  const dir = new THREE.Vector3(0, 0.8, 0.6).normalize();
-  return (
-    <PerspectiveCamera
-      makeDefault
-      fov={fov}
-      near={0.1}
-      far={80}
-      position={[dir.x * dist, 0.3 + dir.y * dist, 0.25 + dir.z * dist]}
-      onUpdate={(cam) => cam.lookAt(0, 0.3, 0.25)}
-    />
-  );
+  return <FitCamera points={VIEW_POINTS} direction={[0, 0.8, 0.6]} fov={30} />;
 }
 
 const _m = new THREE.Matrix4();

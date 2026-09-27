@@ -486,6 +486,10 @@ export interface ExposureSnapshot {
   };
   networks: { name: string; category: string }[];
   rules_count: number;
+  /** Blocages posés par DeTecTX (groupe dédié) : les seuls que l'interface peut retirer. */
+  detectx_rules: { name: string; proto: "tcp" | "udp" | "any"; ports: number[]; profiles: string[] }[];
+  /** Backend déjà administrateur : pas d'invite UAC. */
+  elevated: boolean;
   ports: PortExposure[];
   summary: Record<PortVerdict | RiskLevel, number>;
   timestamp: string;
@@ -496,6 +500,33 @@ export async function fetchExposure(): Promise<ExposureSnapshot> {
   const res = await fetch(`${API_URL}/metrics/exposure`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await readError(res));
   return (await res.json()) as ExposureSnapshot;
+}
+
+export type FirewallProfile = "domain" | "private" | "public";
+
+/**
+ * Bloque l'entrant sur des ports (règles du groupe DeTecTX). Windows affiche une invite UAC :
+ * la requête reste en attente jusqu'à la réponse de l'utilisateur (2 min au plus).
+ */
+export async function blockPorts(targets: { proto: "tcp" | "udp"; port: number }[], profiles: FirewallProfile[]): Promise<{ ok: boolean; rules: string[] }> {
+  const res = await fetch(`${API_URL}/metrics/firewall/block`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ targets, profiles }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as { ok: boolean; rules: string[] };
+}
+
+/** Retire une règle de blocage DeTecTX (invite UAC). */
+export async function unblockRule(name: string): Promise<{ ok: boolean; rules: string[] }> {
+  const res = await fetch(`${API_URL}/metrics/firewall/unblock`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as { ok: boolean; rules: string[] };
 }
 
 export async function fetchConnections(): Promise<NetSnapshot> {
