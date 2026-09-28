@@ -11,17 +11,19 @@ from sqlalchemy import case, func, select
 
 from app.clients import get_opensearch
 from app.db import SessionLocal, engine
-from app.detection import event_catalog, hunts
+from app.detection import event_catalog, event_narrator, hunts
 from app.models.alert import Alert
 from app.models.event import Event
 from app.schemas.events import (
     EventDetail,
     EventHistogram,
+    FeedItem,
     HistogramAlert,
     HuntOut,
     LinkedAlert,
+    ReliefLane,
 )
-from app.services import collection
+from app.services import collection, winlog_collector
 from app.services import events as ev
 
 HOUR = timedelta(hours=1)
@@ -114,7 +116,7 @@ async def histogram(hours: int, now: datetime | None = None) -> EventHistogram:
     def add(channel: str, at: datetime, n: int) -> None:
         index = int((at - start) / HOUR)
         if 0 <= index < hours:
-            counts.setdefault(channel, [0] * hours)[index] += n
+            counts.setdefault(event_catalog.theme_of(channel), [0] * hours)[index] += n
 
     if ev._use_sql():
         bucket = _hour_bucket()
@@ -131,25 +133,75 @@ async def histogram(hours: int, now: datetime | None = None) -> EventHistogram:
             for c in b["channels"]["buckets"]:
                 add(c["key"], at, c["doc_count"])
 
-    # Balises d'alertes : sévérité par (tranche, journal).
-    alert_bins: dict[tuple[int, str | None, str], int] = {}
+    # Balises d'alertes : sévérité par (tranche, thème).
+    alert_bins: dict[tuple[int, str, str], int] = {}
     async with SessionLocal() as session:
         when = func.coalesce(Alert.event_timestamp, Alert.created_at)
         rows = await session.execute(select(when, Alert.channel, Alert.severity).where(when >= start, when < end))
         for at, channel, severity in rows.all():
             index = int((_aware(at) - start) / HOUR)
             if 0 <= index < hours:
-                key = (index, channel, severity)
+                key = (index, event_catalog.theme_of(channel), severity)
                 alert_bins[key] = alert_bins.get(key, 0) + 1
 
-    ordered = [c for c, _ in collection.EXPECTED if c in counts] + sorted(c for c in counts if c not in dict(collection.EXPECTED))
     return EventHistogram(
         start=start,
         hours=hours,
-        channels=ordered,
+        lanes=[ReliefLane(key=t.key, label=t.label) for t in event_catalog.THEMES],
         counts=counts,
-        alerts=[HistogramAlert(bin=b, channel=c, severity=s, count=n) for (b, c, s), n in sorted(alert_bins.items(), key=lambda kv: kv[0][0])],
+        alerts=[HistogramAlert(bin=b, lane=lane, severity=s, count=n) for (b, lane, s), n in sorted(alert_bins.items(), key=lambda kv: kv[0][0])],
     )
+
+
+def theme_channels(theme: str) -> list[str] | None:
+    """Journaux d'un thème (connus du collecteur ou attendus de l'agent). None = thème inconnu."""
+    if theme not in {t.key for t in event_catalog.THEMES}:
+        return None
+    known = [c for c, _ in collection.EXPECTED] + ["DeTecTX-LogFile"]
+    return [c for c in known if event_catalog.theme_of(c) == theme]
+
+
+# ─────────────────────────────── fil de la machine
+FOLD_WINDOW = timedelta(minutes=2)
+
+
+def fold_feed(items: list[FeedItem], window: timedelta = FOLD_WINDOW) -> list[FeedItem]:
+    """Replie les répétitions : Windows journalise souvent une même modification plusieurs fois
+    dans la seconde (une ligne par variante de règle, par profil…). Même journal + même ID + même
+    phrase, à moins de `window` du plus ancien du groupe -> une seule ligne avec un compteur.
+    `items` est trié du plus récent au plus ancien ; l'ordre est conservé."""
+    out: list[FeedItem] = []
+    groups: dict[tuple, tuple[int, datetime]] = {}  # clé -> (index dans out, plus ancien horodatage)
+    for item in items:
+        key = (item.channel, item.event_id, item.summary or item.title)
+        found = groups.get(key)
+        if found and found[1] - item.timestamp <= window:
+            index, _ = found
+            out[index].count += 1
+            groups[key] = (index, item.timestamp)
+            continue
+        groups[key] = (len(out), item.timestamp)
+        out.append(item)
+    return out
+
+
+async def feed(minutes: int, limit: int) -> list[FeedItem]:
+    """Événements marquants récents, en phrases : ceux que le catalogue juge intéressants ou
+    qu'un gabarit sait raconter (Wi-Fi, périphériques…). Le bruit connu est écarté."""
+    page = await ev.search_events(minutes=minutes, limit=400)
+    items: list[FeedItem] = []
+    for e in page.items:
+        if e.level == "Verbose":  # journalisation exhaustive (ex. tous les blocs PowerShell) : pas un fait marquant
+            continue
+        known = event_catalog.describe(e.channel, e.event_id)
+        narrated = (event_catalog.family(e.channel), e.event_id) in event_narrator.TEMPLATES
+        level = known["level"] if known else "info"
+        if not narrated and level == "info":
+            continue
+        items.append(
+            FeedItem(id=e.id, timestamp=e.timestamp, channel=e.channel, theme=event_catalog.theme_of(e.channel), event_id=e.event_id, title=e.title, summary=e.summary, level=level)
+        )
+    return fold_feed(items)[:limit]
 
 
 # ─────────────────────────────── santé par journal
@@ -187,7 +239,7 @@ async def channel_stats(now: datetime | None = None) -> dict[str, tuple[datetime
 
 
 async def health() -> dict:
-    return collection.assess(await channel_stats(), collection.latest_heartbeat(), collection.sysmon_status())
+    return collection.assess(await channel_stats(), collection.heartbeats(), collection.sysmon_status(), winlog_collector.channel_status())
 
 
 # ─────────────────────────────── chasses

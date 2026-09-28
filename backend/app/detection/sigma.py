@@ -50,7 +50,6 @@ _CATEGORY_MAP: dict[str, tuple[str, set[int] | None]] = {
     "raw_access_thread": ("Sysmon", {9}),
     "process_tampering": ("Sysmon", {25}),
     "sysmon_status": ("Sysmon", {4, 16}),
-    "dns_query": ("Sysmon", {22}),
     "ps_script": ("PowerShell", {4104}),
     "ps_module": ("PowerShell", {4103}),
     "ps_classic_start": ("PowerShell", None),

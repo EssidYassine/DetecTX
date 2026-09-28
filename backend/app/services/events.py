@@ -14,6 +14,7 @@ from app.clients import get_opensearch
 from app.config import get_settings
 from app.db import SessionLocal
 from app.detection.event_catalog import CATALOG, family
+from app.detection.event_narrator import summarize
 from app.models.event import Event
 from app.schemas.events import EventOut, EventPage, EventStats, IngestEvent
 
@@ -62,9 +63,31 @@ def _utc(dt: datetime) -> datetime:
 
 
 # ─────────────────────────────── Ingestion ────────────────────────────────
+def _identity(e: IngestEvent) -> tuple[str, str, int] | None:
+    """Identité d'un événement Windows : (machine, journal, RecordID). None s'il n'en a pas."""
+    if e.record_id is None:
+        return None
+    return (e.computer or "", e.channel, e.record_id)
+
+
 async def index_events(events: list[IngestEvent]) -> int:
+    """Ingestion idempotente : un événement déjà reçu (même machine, journal, RecordID) est
+    ignoré. Indispensable quand l'agent et le collecteur intégré lisent les mêmes journaux."""
+    unique: dict[tuple, IngestEvent] = {}
+    for e in events:
+        unique.setdefault(_identity(e) or ("", "", id(e)), e)
+    events = list(unique.values())
     if _use_sql():
         async with SessionLocal() as session:
+            keyed = [k for k in (_identity(e) for e in events) if k]
+            if keyed:
+                rows = await session.execute(
+                    select(Event.computer, Event.channel, Event.record_id).where(
+                        Event.record_id.in_({k[2] for k in keyed}), Event.channel.in_({k[1] for k in keyed})
+                    )
+                )
+                seen = {(c or "", ch, r) for c, ch, r in rows.all()}
+                events = [e for e in events if _identity(e) not in seen]
             for e in events:
                 session.add(
                     Event(
@@ -86,6 +109,8 @@ async def index_events(events: list[IngestEvent]) -> int:
     actions = [
         {
             "_index": INDEX,
+            # _id déterministe : renvoyer le même événement l'écrase au lieu de le dupliquer.
+            **({"_id": "|".join(map(str, key))} if (key := _identity(e)) else {}),
             "_source": {
                 "@timestamp": _utc(e.timestamp).isoformat(),
                 "channel": e.channel,
@@ -123,7 +148,7 @@ async def search_events(
         async with SessionLocal() as session:
             conds = _sql_conditions(channel, event_id, keywords or [], minutes, phrase=True)
             if q:
-                conds.append(Event.message.ilike(f"%{q}%"))
+                conds.append(_contains(q))
             if since is not None:
                 conds.append(Event.ts >= _utc(since))
             if until is not None:
@@ -256,6 +281,14 @@ async def count_events(
 
 
 # ─────────────────────────────── Helpers ──────────────────────────────────
+def _contains(text: str):
+    r"""« Le message contient `text` », littéralement : %, _ et \ ne sont pas des jokers.
+    L'échappement explicite rend le filtre identique sous SQLite et PostgreSQL (où \ est
+    le caractère d'échappement par défaut de LIKE : « \Startup\ » n'y trouvait rien)."""
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return Event.message.ilike(f"%{escaped}%", escape="\\")
+
+
 def _as_list(value) -> list:
     """None -> [] ; valeur -> [valeur] ; liste -> liste (sans les vides)."""
     if value is None:
@@ -293,7 +326,7 @@ def _sql_conditions(channel, event_id, keywords, minutes, *, phrase: bool):
         conds.append(Event.ts >= since)
     kws = [k for k in keywords if k]
     if kws:
-        conds.append(or_(*[Event.message.ilike(f"%{k}%") for k in kws]))
+        conds.append(or_(*[_contains(k) for k in kws]))
     return conds
 
 
@@ -306,6 +339,7 @@ def _row_to_out(r: Event) -> EventOut:
     return EventOut(
         id=str(r.id),
         title=_title(r.channel, r.event_id),
+        summary=summarize(r.channel, r.event_id, r.fields, r.message),
         timestamp=r.ts,
         channel=r.channel,
         event_id=r.event_id,
@@ -322,6 +356,7 @@ def _src_to_out(hit: dict) -> EventOut:
     return EventOut(
         id=str(hit["_id"]),
         title=_title(s.get("channel"), s.get("event_id")),
+        summary=summarize(s.get("channel"), s.get("event_id"), s.get("raw"), s.get("message")),
         timestamp=s["@timestamp"],
         channel=s.get("channel", "unknown"),
         event_id=s.get("event_id"),

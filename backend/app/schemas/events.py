@@ -43,6 +43,7 @@ class EventOut(BaseModel):
     id: str  # clé SQL ou _id OpenSearch
     timestamp: datetime
     title: str | None = None  # libellé de l'Event ID (catalogue), ex. « Nouveau service installé »
+    summary: str | None = None  # phrase lisible (« Connecté au Wi-Fi « Maison » »)
     channel: str
     event_id: int | None = None
     provider: str | None = None
@@ -79,17 +80,34 @@ class EventDetail(EventOut):
 
 class HistogramAlert(BaseModel):
     bin: int
-    channel: str | None
+    lane: str  # thème
     severity: str
     count: int
+
+
+class ReliefLane(BaseModel):
+    key: str
+    label: str
 
 
 class EventHistogram(BaseModel):
     start: datetime  # début de la première tranche (UTC, heure pleine)
     hours: int
-    channels: list[str]
-    counts: dict[str, list[int]]  # journal -> nombre d'événements par heure
+    lanes: list[ReliefLane]  # thèmes, de l'avant vers l'arrière du relief
+    counts: dict[str, list[int]]  # thème -> nombre d'événements par heure
     alerts: list[HistogramAlert]
+
+
+class FeedItem(BaseModel):
+    id: str
+    timestamp: datetime
+    channel: str
+    theme: str
+    event_id: int | None
+    title: str | None
+    summary: str | None
+    level: str  # intérêt pour l'analyste : info | low | medium | high
+    count: int = 1  # répétitions repliées (même journal, même ID, même phrase, rapprochées)
 
 
 class HuntOut(BaseModel):

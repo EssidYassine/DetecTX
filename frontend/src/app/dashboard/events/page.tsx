@@ -2,20 +2,32 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { fetchCollectionHealth, fetchEventHistogram, fetchHunts, fetchMe, type CollectionHealth, type EventHistogram, type Hunt } from "@/lib/api";
-import { binWindow, fmtHourRange, LANES, LIST_WINDOWS, PERIODS, type PeriodKey } from "@/lib/events-ui";
+import {
+  fetchCollectionHealth,
+  fetchEventHistogram,
+  fetchFeed,
+  fetchHunts,
+  fetchMe,
+  type CollectionHealth,
+  type EventHistogram,
+  type FeedItem,
+  type Hunt,
+} from "@/lib/api";
+import { binWindow, fmtHourRange, LIST_WINDOWS, PERIODS, SOURCES, type PeriodKey } from "@/lib/events-ui";
 import { usePolling } from "@/lib/use-polling";
 import { ReportButton } from "@/components/report-button";
 import type { ReliefSlice } from "@/components/three/event-relief";
 import { ReliefPanel } from "@/components/events/relief-panel";
-import { HealthPanel } from "@/components/events/health-panel";
+import { HEALTH_TONE } from "@/components/events/health-panel";
+import { SidePanel } from "@/components/events/side-panel";
+import { ThemeStrip } from "@/components/events/theme-strip";
 import { HuntPanel, type EventQuery } from "@/components/events/hunt-panel";
 import { EventReader } from "@/components/events/event-reader";
 
-const HEALTH_MS = 15_000; // l'agent envoie un battement de cœur toutes les 15 s
+const HEALTH_MS = 15_000; // collecteur intégré : relève toutes les 10 s, agent : 15 s
+const FEED_MS = 15_000;
 const RELIEF_MS = 60_000;
 const HUNTS_MS = 60_000;
-const HEALTH_TONE = { ok: "accent", degraded: "warn", down: "critical" } as const;
 
 // useSearchParams() exige une frontière Suspense pour que Next puisse pré-rendre la page.
 export default function EventsPage() {
@@ -33,7 +45,8 @@ function initialQuery(channel: string | null, minutes: number | null): EventQuer
   const since = valid ? new Date(until.getTime() - (minutes as number) * 60_000) : null;
   return {
     hunt: null,
-    channel: channel && LANES.some((l) => l.channel === channel) ? channel : "",
+    channel: channel && SOURCES.some((s) => s.channel === channel) ? channel : "",
+    theme: null,
     eventId: null,
     q: "",
     window: "7d",
@@ -49,6 +62,7 @@ function EventsView() {
   const [histogram, setHistogram] = useState<EventHistogram | null>(null);
   const [health, setHealth] = useState<CollectionHealth | null>(null);
   const [hunts, setHunts] = useState<Hunt[] | null>(null);
+  const [feed, setFeed] = useState<FeedItem[] | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [relief, setRelief] = useState<ReliefSlice | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
@@ -83,7 +97,17 @@ function EventsView() {
     }
   }, [huntMinutes]);
 
+  const loadFeed = useCallback(async () => {
+    try {
+      setFeed(await fetchFeed());
+      setNow(Date.now());
+    } catch {
+      // Fil indisponible : on garde les dernières lignes.
+    }
+  }, []);
+
   usePolling(loadHealth, HEALTH_MS);
+  usePolling(loadFeed, FEED_MS);
   usePolling(loadRelief, RELIEF_MS);
   usePolling(loadHunts, HUNTS_MS);
 
@@ -106,6 +130,7 @@ function EventsView() {
   // Tout changement de filtre ramène à la première page (sauf la pagination elle-même).
   const onQuery = useCallback((patch: Partial<EventQuery>) => {
     if ("slice" in patch && patch.slice === null) setRelief(null);
+    if ("theme" in patch && patch.theme === null) setRelief((r) => (r ? { ...r, lane: null } : r));
     setQuery((q) => ({ ...q, ...("page" in patch ? {} : { page: 0 }), ...patch }));
   }, []);
 
@@ -115,16 +140,22 @@ function EventsView() {
       onQuery({ slice: null });
       return;
     }
-    const label = `${fmtHourRange(histogram.start, slice.bin)}${slice.channel ? ` · ${LANES.find((l) => l.channel === slice.channel)?.short ?? slice.channel}` : ""}`;
-    setQuery((q) => ({ ...q, page: 0, hunt: null, eventId: null, channel: slice.channel ?? "", slice: { ...binWindow(histogram.start, slice.bin), label } }));
+    const label = fmtHourRange(histogram.start, slice.bin);
+    setQuery((q) => ({ ...q, page: 0, hunt: null, eventId: null, channel: "", theme: slice.lane, slice: { ...binWindow(histogram.start, slice.bin), label } }));
+  }
+
+  function onThemePick(theme: string | null) {
+    setRelief((r) => (r ? { ...r, lane: theme } : r));
+    setQuery((q) => ({ ...q, page: 0, hunt: null, eventId: null, channel: "", theme }));
   }
 
   const tone = health ? HEALTH_TONE[health.status] : "muted";
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
+      {/* Une seule ligne sur desktop : le résumé se tronque plutôt que de pousser la grille (pas de scroll de page). */}
+      <div className="flex flex-wrap items-center justify-between gap-3 lg:flex-nowrap">
+        <div className="min-w-0 flex-1">
           <h1 className="text-lg font-semibold">Journaux &amp; chasse</h1>
           <p className="truncate text-sm text-muted">
             {health ? (
@@ -134,13 +165,16 @@ function EventsView() {
             )}
           </p>
         </div>
-        <ReportButton />
+        <div className="flex shrink-0 items-center gap-3">
+          <ThemeStrip histogram={histogram} active={query.theme} onPick={onThemePick} className="hidden 2xl:flex" />
+          <ReportButton />
+        </div>
       </div>
 
       {/* Desktop : tout tient dans l'écran ; seules la liste et les fiches défilent. */}
       <div className="grid gap-4 lg:h-[calc(100dvh-13.25rem)] lg:min-h-[520px] lg:grid-cols-12 lg:grid-rows-[minmax(0,0.95fr)_minmax(0,1.25fr)]">
         <ReliefPanel histogram={histogram} period={period} onPeriod={setPeriod} selected={relief} onSelect={onReliefSelect} className="h-80 lg:col-span-8 lg:h-auto" />
-        <HealthPanel health={health} email={email} now={now} className="h-80 lg:col-span-4 lg:h-auto" />
+        <SidePanel feed={feed} health={health} email={email} now={now} selected={opened} onOpen={setOpened} className="h-80 lg:col-span-4 lg:h-auto" />
         <HuntPanel
           query={query}
           onQuery={onQuery}

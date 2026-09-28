@@ -12,6 +12,7 @@ from app.schemas.events import (
     EventHistogram,
     EventPage,
     EventStats,
+    FeedItem,
     HuntOut,
     IngestBatch,
     IngestResult,
@@ -36,6 +37,7 @@ async def ingest(
     if batch.agent or batch.events:
         collection.record(
             computer or "inconnu",
+            kind="agent",
             version=batch.agent.version if batch.agent else None,
             admin=batch.agent.admin if batch.agent else None,
             interval_sec=batch.agent.interval_sec if batch.agent else None,
@@ -50,6 +52,7 @@ async def list_events(
     event_id: int | None = Query(default=None, ge=0),
     q: str | None = Query(default=None, max_length=200, description="Recherche plein texte dans le message"),
     hunt: str | None = Query(default=None, max_length=40, description="Identifiant d'une chasse prête à l'emploi"),
+    theme: str | None = Query(default=None, max_length=20, description="Thème du relief (journaux regroupés)"),
     minutes: int | None = Query(default=None, ge=1, le=60 * 24 * 90, description="Fenêtre : N dernières minutes"),
     since: datetime | None = Query(default=None, description="Début de tranche (inclus)"),
     until: datetime | None = Query(default=None, description="Fin de tranche (exclue)"),
@@ -64,7 +67,12 @@ async def list_events(
         if filters is None:
             raise HTTPException(status_code=404, detail="Chasse inconnue.")
         return await svc.search_events(**filters, q=q, minutes=minutes, since=since, until=until, offset=offset, limit=limit)
-    return await svc.search_events(channel=channel, event_id=event_id, q=q, minutes=minutes, since=since, until=until, offset=offset, limit=limit)
+    channels: str | list[str] | None = channel
+    if theme:
+        channels = event_insights.theme_channels(theme)
+        if channels is None:
+            raise HTTPException(status_code=404, detail="Thème inconnu.")
+    return await svc.search_events(channel=channels, event_id=event_id, q=q, minutes=minutes, since=since, until=until, offset=offset, limit=limit)
 
 
 @router.get("/stats", response_model=EventStats)
@@ -95,6 +103,16 @@ async def hunts(
 ) -> list[HuntOut]:
     """Chasses prêtes à l'emploi, avec le nombre d'événements correspondants sur la période."""
     return await event_insights.hunt_counts(minutes)
+
+
+@router.get("/feed", response_model=list[FeedItem])
+async def feed(
+    minutes: int = Query(default=60 * 24, ge=5, le=60 * 24 * 7),
+    limit: int = Query(default=40, ge=1, le=100),
+    _: User = Depends(get_current_user),
+) -> list[FeedItem]:
+    """Fil de la machine : événements marquants récents, racontés en une phrase."""
+    return await event_insights.feed(minutes, limit)
 
 
 @router.get("/{event_key}", response_model=EventDetail)

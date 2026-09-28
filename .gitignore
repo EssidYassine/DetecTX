@@ -56,3 +56,6 @@ backend/app/detection/_sigma_src/regression_data/
 
 # Notes locales de démarrage (contiennent des secrets : webhook, JWT)
 START APP.txt
+
+# État du collecteur intégré (marque-pages des journaux)
+backend/data/

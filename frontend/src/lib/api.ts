@@ -98,6 +98,8 @@ export interface EventItem {
   timestamp: string;
   /** Libellé de l'Event ID (catalogue DeTecTX), ex. « Nouveau service installé ». */
   title: string | null;
+  /** Phrase lisible, ex. « Connecté au Wi-Fi « Maison » ». */
+  summary: string | null;
   channel: string;
   event_id: number | null;
   provider: string | null;
@@ -124,9 +126,22 @@ export interface EventDetail extends EventItem {
 export interface EventHistogram {
   start: string; // début de la 1re tranche horaire (UTC)
   hours: number;
-  channels: string[];
-  counts: Record<string, number[]>;
-  alerts: { bin: number; channel: string | null; severity: string; count: number }[];
+  lanes: { key: string; label: string }[]; // thèmes, de l'avant vers l'arrière du relief
+  counts: Record<string, number[]>; // thème -> volume par heure
+  alerts: { bin: number; lane: string; severity: string; count: number }[];
+}
+
+export interface FeedItem {
+  id: string;
+  timestamp: string;
+  channel: string;
+  theme: string;
+  event_id: number | null;
+  title: string | null;
+  summary: string | null;
+  level: "info" | "low" | "medium" | "high";
+  /** Répétitions repliées (Windows journalise souvent un même changement plusieurs fois). */
+  count: number;
 }
 
 export interface Hunt {
@@ -147,7 +162,16 @@ export type ChannelStatus = "ok" | "quiet" | "stale" | "missing";
 export interface CollectionHealth {
   status: "ok" | "degraded" | "down";
   summary: string;
-  agent: { alive: boolean; computer: string | null; last_seen: string | null; version: string | null; admin: boolean | null; interval_sec: number | null };
+  collectors: {
+    kind: "integre" | "agent";
+    label: string;
+    computer: string;
+    alive: boolean;
+    last_seen: string;
+    version: string | null;
+    admin: boolean | null;
+    interval_sec: number | null;
+  }[];
   sysmon: { installed: boolean; running: boolean; service: string | null };
   channels: { channel: string; label: string; last_event: string | null; count_24h: number; status: ChannelStatus; hint: string | null }[];
   last_event: string | null;
@@ -181,6 +205,7 @@ export async function searchEvents(params: {
   channel?: string;
   eventId?: number;
   hunt?: string;
+  theme?: string;
   minutes?: number;
   since?: string;
   until?: string;
@@ -192,6 +217,7 @@ export async function searchEvents(params: {
   if (params.channel) qs.set("channel", params.channel);
   if (params.eventId !== undefined) qs.set("event_id", String(params.eventId));
   if (params.hunt) qs.set("hunt", params.hunt);
+  if (params.theme) qs.set("theme", params.theme);
   if (params.minutes) qs.set("minutes", String(params.minutes));
   if (params.since) qs.set("since", params.since);
   if (params.until) qs.set("until", params.until);
@@ -217,6 +243,13 @@ export async function fetchHunts(minutes = 60 * 24 * 7): Promise<Hunt[]> {
   const res = await fetch(`${API_URL}/events/hunts?minutes=${minutes}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await readError(res));
   return (await res.json()) as Hunt[];
+}
+
+/** Fil de la machine : événements marquants récents, en phrases. */
+export async function fetchFeed(minutes = 60 * 24, limit = 40): Promise<FeedItem[]> {
+  const res = await fetch(`${API_URL}/events/feed?minutes=${minutes}&limit=${limit}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as FeedItem[];
 }
 
 export async function fetchCollectionHealth(): Promise<CollectionHealth> {

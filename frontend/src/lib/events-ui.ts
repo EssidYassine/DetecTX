@@ -1,26 +1,48 @@
-// Page Événements : journaux affichés, libellés, formats. Sans dépendance three.js.
+// Page Événements : journaux, thèmes, libellés, formats. Sans dépendance three.js.
 
-export interface Lane {
+export interface Source {
   channel: string;
   label: string;
-  short: string;
 }
 
-/** Ordre des couloirs du relief, de l'avant vers l'arrière (volumes faibles devant). */
-export const LANES: Lane[] = [
-  { channel: "Security", label: "Sécurité", short: "Sécurité" },
-  { channel: "Microsoft-Windows-PowerShell/Operational", label: "PowerShell", short: "PowerShell" },
-  { channel: "DeTecTX-FileMonitor", label: "Fichiers surveillés", short: "Fichiers" },
-  { channel: "Application", label: "Applications", short: "Applis" },
-  { channel: "System", label: "Système", short: "Système" },
-  { channel: "Microsoft-Windows-Sysmon/Operational", label: "Sysmon", short: "Sysmon" },
+/** Journaux proposés dans le filtre (même liste que la santé de la collecte côté backend). */
+export const SOURCES: Source[] = [
+  { channel: "Security", label: "Sécurité" },
+  { channel: "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational", label: "Sessions" },
+  { channel: "Microsoft-Windows-Windows Defender/Operational", label: "Defender" },
+  { channel: "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall", label: "Pare-feu" },
+  { channel: "Microsoft-Windows-CodeIntegrity/Operational", label: "Intégrité du code" },
+  { channel: "Microsoft-Windows-PowerShell/Operational", label: "PowerShell (scripts)" },
+  { channel: "Windows PowerShell", label: "PowerShell (sessions)" },
+  { channel: "Microsoft-Windows-Sysmon/Operational", label: "Sysmon" },
+  { channel: "Microsoft-Windows-WMI-Activity/Operational", label: "WMI" },
+  { channel: "Microsoft-Windows-TaskScheduler/Operational", label: "Tâches planifiées" },
+  { channel: "Microsoft-Windows-WLAN-AutoConfig/Operational", label: "Wi-Fi" },
+  { channel: "Microsoft-Windows-NetworkProfile/Operational", label: "Réseaux" },
+  { channel: "Microsoft-Windows-Kernel-PnP/Configuration", label: "Périphériques" },
+  { channel: "Microsoft-Windows-Bits-Client/Operational", label: "Transferts BITS" },
+  { channel: "System", label: "Système" },
+  { channel: "Application", label: "Applications" },
+  { channel: "DeTecTX-FileMonitor", label: "Fichiers surveillés" },
+  { channel: "DeTecTX-LogFile", label: "Fichiers .log" },
 ];
 
-const LABELS = new Map(LANES.map((l) => [l.channel, l.short]));
+const LABELS = new Map(SOURCES.map((s) => [s.channel, s.label]));
 
 export function channelLabel(channel: string): string {
   return LABELS.get(channel) ?? channel.replace(/^Microsoft-Windows-/, "").replace(/\/Operational$/, "");
 }
+
+/** Thèmes du relief et du fil (mêmes clés que le backend : event_catalog.THEMES). */
+export const THEMES: Record<string, { label: string; icon: ThemeIcon }> = {
+  sessions: { label: "Sessions & comptes", icon: "user" },
+  defense: { label: "Défense", icon: "shield" },
+  execution: { label: "Exécution", icon: "terminal" },
+  network: { label: "Réseau & périphériques", icon: "wifi" },
+  system: { label: "Système", icon: "chip" },
+  apps: { label: "Applications & fichiers", icon: "window" },
+};
+export type ThemeIcon = "user" | "shield" | "terminal" | "wifi" | "chip" | "window";
 
 export const PERIODS = [
   { key: "24h", label: "24 h", hours: 24 },

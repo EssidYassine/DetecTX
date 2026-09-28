@@ -1,11 +1,12 @@
 "use client";
 
 /**
- * « Relief de l'activité » 3D : un couloir par journal Windows, le temps s'écoulant de gauche
- * (plus ancien) à droite (maintenant). La hauteur du relief suit le nombre d'événements par
- * heure (échelle logarithmique : un pic de 5 000 n'écrase pas une heure à 12). Les balises
- * rouges ou ambre marquent les heures où le moteur de détection a levé des alertes.
- * Survol = journal + tranche horaire ; clic = filtre la liste sur cette tranche.
+ * « Relief de l'activité » 3D : un couloir par thème (Sessions, Défense, Exécution, Réseau &
+ * périphériques, Système, Applications), le temps s'écoulant de gauche (plus ancien) à droite
+ * (maintenant). La hauteur suit le nombre d'événements par heure (échelle logarithmique : un
+ * pic de 5 000 n'écrase pas une heure à 12). Les balises rouges ou ambre marquent les heures
+ * où le moteur de détection a levé des alertes.
+ * Survol = thème + tranche horaire ; clic = filtre la liste sur cette tranche.
  *
  * Modèle généré par Blender (assets/3d/build_relief.py -> public/models/relief.glb).
  * Contrat : MAT_ReliefNow ; TERRAIN_W / LANES / LANE_D / LANE_GAP / TOP_Y / TICKS repris du script.
@@ -14,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame, type ThreeEvent } from "@react-three/fiber";
+import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { EventHistogram } from "@/lib/api";
@@ -28,29 +29,26 @@ const LANES = 6;
 const LANE_D = 0.62;
 const LANE_GAP = 0.08;
 const SPAN_D = LANES * LANE_D + (LANES - 1) * LANE_GAP;
+const PLATE_W = TERRAIN_W + 0.8;
 const TOP_Y = 0.132;
 const TICKS = 8;
 const PEAK = 1.05; // hauteur du relief au volume maximal
 const SUBDIV = 4; // points intermédiaires par heure (relief lissé)
 const MAX_BEACONS = 96;
+const LABEL_X = -PLATE_W / 2 - 0.12; // noms des thèmes : hors du plateau, à gauche
 
 // Couloir 0 à l'avant (vers la caméra) : Blender -Y -> three +Z.
 const laneZ = (i: number) => SPAN_D / 2 - LANE_D / 2 - i * (LANE_D + LANE_GAP);
-// Enveloppe : plateau + noms des journaux à gauche (≈ 1 unité) + graduations devant + reliefs.
-const VIEW_POINTS = [...boxPoints(TERRAIN_W / 2 + 1.1, SPAN_D / 2 + 0.6, 0, 0.13), ...boxPoints(TERRAIN_W / 2, SPAN_D / 2, TOP_Y, TOP_Y + PEAK + 0.2)];
-
-export interface ReliefLane {
-  channel: string;
-  label: string;
-}
+// Enveloppe : plateau + noms des thèmes à gauche (~1,6 unité) + graduations devant + reliefs.
+const VIEW_POINTS = [...boxPoints(PLATE_W / 2 + 1.6, SPAN_D / 2 + 0.6, 0, 0.13), ...boxPoints(TERRAIN_W / 2, SPAN_D / 2, TOP_Y, TOP_Y + PEAK + 0.2)];
 
 export interface ReliefSlice {
   bin: number;
-  channel: string | null; // null = toute la tranche horaire
+  lane: string | null; // clé du thème ; null = toute la tranche horaire
 }
 
 export interface ReliefHover {
-  channel: string;
+  lane: string;
   bin: number;
   x: number;
   y: number;
@@ -58,7 +56,6 @@ export interface ReliefHover {
 
 export interface EventReliefProps {
   histogram: EventHistogram;
-  lanes: ReliefLane[]; // ordre fixe, de l'avant vers l'arrière
   selected: ReliefSlice | null;
   onHover?: (hover: ReliefHover | null) => void;
   onSelect?: (slice: ReliefSlice | null) => void;
@@ -117,13 +114,21 @@ function binCenterX(bin: number, hours: number): number {
   return -TERRAIN_W / 2 + ((bin + 0.5) / hours) * TERRAIN_W;
 }
 
+/** Panneau très large (écran 16:9, relief pleine largeur) : vue plus rasante pour occuper l'espace. */
+function ReliefCamera() {
+  const size = useThree((s) => s.size);
+  const aspect = size.width > 0 && size.height > 0 ? size.width / size.height : 2;
+  const direction: [number, number, number] = aspect > 3.2 ? [0, 0.42, 0.91] : [0, 0.52, 0.85];
+  return <FitCamera points={VIEW_POINTS} direction={direction} fov={30} />;
+}
+
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
 const _p = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _c = new THREE.Color();
 
-function ReliefModel({ histogram, lanes, selected, onHover, onSelect }: EventReliefProps) {
+function ReliefModel({ histogram, selected, onHover, onSelect }: EventReliefProps) {
   const { palette, animate } = useScene();
   const { scene } = useGLTF(MODEL_URL);
   const rig = useMemo(() => {
@@ -143,12 +148,13 @@ function ReliefModel({ histogram, lanes, selected, onHover, onSelect }: EventRel
   const slice = useRef<THREE.Mesh>(null);
 
   const hours = histogram.hours;
+  const lanes = useMemo(() => histogram.lanes.slice(0, LANES), [histogram.lanes]);
   // Hauteurs : échelle log commune à tous les couloirs (comparables entre eux).
   const heights = useMemo(() => {
-    const max = Math.max(1, ...lanes.flatMap((l) => histogram.counts[l.channel] ?? [0]));
+    const max = Math.max(1, ...lanes.flatMap((l) => histogram.counts[l.key] ?? [0]));
     const scale = Math.log1p(max);
-    return lanes.map((l) => (histogram.counts[l.channel] ?? new Array(hours).fill(0)).map((v) => (v > 0 ? 0.06 + (PEAK - 0.06) * (Math.log1p(v) / scale) : 0.012)));
-  }, [histogram, lanes, hours]);
+    return lanes.map((l) => (histogram.counts[l.key] ?? new Array(hours).fill(0)).map((v) => (v > 0 ? 0.06 + (PEAK - 0.06) * (Math.log1p(v) / scale) : 0.012)));
+  }, [histogram.counts, lanes, hours]);
 
   const surfaces = useMemo(
     () => heights.map((h, i) => laneGeometry(h, laneZ(i), palette.accent.clone().multiplyScalar(0.28), palette.accent)),
@@ -161,14 +167,14 @@ function ReliefModel({ histogram, lanes, selected, onHover, onSelect }: EventRel
   const sliceMat = useMemo(() => new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.12, depthWrite: false, toneMapped: false }), []);
 
   const beaconList = useMemo(() => {
-    const laneOf = new Map(lanes.map((l, i) => [l.channel, i]));
+    const laneOf = new Map(lanes.map((l, i) => [l.key, i]));
     return histogram.alerts
-      .filter((a) => a.channel !== null && laneOf.has(a.channel))
+      .filter((a) => laneOf.has(a.lane))
       .slice(0, MAX_BEACONS)
       .map((a) => {
-        const lane = laneOf.get(a.channel as string) as number;
+        const lane = laneOf.get(a.lane) as number;
         const h = heights[lane]?.[a.bin] ?? 0;
-        return { ...a, lane, x: binCenterX(a.bin, hours), z: laneZ(lane), base: TOP_Y + h };
+        return { ...a, x: binCenterX(a.bin, hours), z: laneZ(lane), base: TOP_Y + h };
       });
   }, [histogram.alerts, lanes, heights, hours]);
 
@@ -222,18 +228,18 @@ function ReliefModel({ histogram, lanes, selected, onHover, onSelect }: EventRel
     if (sl) {
       sl.visible = selected !== null;
       if (selected) {
-        const lane = selected.channel ? lanes.findIndex((l) => l.channel === selected.channel) : -1;
+        const lane = selected.lane ? lanes.findIndex((l) => l.key === selected.lane) : -1;
         sl.position.set(binCenterX(selected.bin, hours), TOP_Y + (PEAK + 0.3) / 2, lane >= 0 ? laneZ(lane) : 0);
         sl.scale.set(TERRAIN_W / hours, PEAK + 0.3, lane >= 0 ? LANE_D : SPAN_D);
       }
     }
   });
 
-  const pick = (e: ThreeEvent<PointerEvent> | ThreeEvent<MouseEvent>): { channel: string; bin: number } | null => {
+  const pick = (e: ThreeEvent<PointerEvent> | ThreeEvent<MouseEvent>): { lane: string; bin: number } | null => {
     const lane: unknown = e.object.userData.lane;
     if (typeof lane !== "number" || !lanes[lane]) return null;
     const bin = Math.min(hours - 1, Math.max(0, Math.floor(((e.point.x + TERRAIN_W / 2) / TERRAIN_W) * hours)));
-    return { channel: lanes[lane].channel, bin };
+    return { lane: lanes[lane].key, bin };
   };
 
   // Graduations horaires : heure locale, avec le jour quand il change.
@@ -261,7 +267,7 @@ function ReliefModel({ histogram, lanes, selected, onHover, onSelect }: EventRel
       />
       {surfaces.map((geo, i) => (
         <mesh
-          key={lanes[i].channel}
+          key={lanes[i].key}
           geometry={geo}
           material={surfaceMat}
           userData={{ lane: i }}
@@ -279,7 +285,7 @@ function ReliefModel({ histogram, lanes, selected, onHover, onSelect }: EventRel
           onClick={(e) => {
             e.stopPropagation();
             const hit = pick(e);
-            if (hit) onSelect?.(selected && selected.bin === hit.bin && selected.channel === hit.channel ? null : hit);
+            if (hit) onSelect?.(selected && selected.bin === hit.bin && selected.lane === hit.lane ? null : hit);
           }}
         />
       ))}
@@ -289,15 +295,17 @@ function ReliefModel({ histogram, lanes, selected, onHover, onSelect }: EventRel
         <boxGeometry args={[1, 1, 1]} />
       </mesh>
       {lanes.map((l, i) => (
-        <Html key={l.channel} position={[-TERRAIN_W / 2 - 0.12, TOP_Y, laneZ(i)]} zIndexRange={[4, 0]} style={{ pointerEvents: "none", transform: "translate(-100%, -50%)" }}>
+        <Html key={l.key} position={[LABEL_X, TOP_Y, laneZ(i)]} zIndexRange={[4, 0]} style={{ pointerEvents: "none", transform: "translate(-100%, -50%)" }}>
           <span className="whitespace-nowrap text-[10px] font-medium text-muted">{l.label}</span>
         </Html>
       ))}
-      {ticks.filter((tk) => tk.label).map((tk) => (
-        <Html key={tk.x} position={[tk.x, TOP_Y, SPAN_D / 2 + 0.42]} center zIndexRange={[4, 0]} style={{ pointerEvents: "none" }}>
-          <span className="whitespace-nowrap font-mono text-[9px] text-muted">{tk.label}</span>
-        </Html>
-      ))}
+      {ticks
+        .filter((tk) => tk.label)
+        .map((tk) => (
+          <Html key={tk.x} position={[tk.x, TOP_Y, SPAN_D / 2 + 0.42]} center zIndexRange={[4, 0]} style={{ pointerEvents: "none" }}>
+            <span className="whitespace-nowrap font-mono text-[9px] text-muted">{tk.label}</span>
+          </Html>
+        ))}
     </>
   );
 }
@@ -308,7 +316,7 @@ export default function EventRelief(props: EventReliefProps) {
     <Stage
       poster="/models/relief_poster.png"
       label={`Relief de l'activité : ${total} événements sur ${props.histogram.hours} h, ${props.histogram.alerts.length} tranche(s) avec alertes`}
-      camera={<FitCamera points={VIEW_POINTS} direction={[0, 0.52, 0.85]} fov={30} />}
+      camera={<ReliefCamera />}
       fps={24}
     >
       <ReliefModel {...props} />

@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     # Journal d'audit (arrêts de processus, triages…) : fichier tournant. Vide = console seule.
     audit_log_path: str = Field(default="logs/audit.log", validation_alias="AUDIT_LOG_PATH")
 
+    # Collecteur intégré : le backend lit lui-même les journaux Windows de l'hôte (sans agent).
+    local_collector: bool = Field(default=True, validation_alias="LOCAL_COLLECTOR")
+    collector_state_path: str = Field(default="data/collector-state.json", validation_alias="COLLECTOR_STATE_PATH")
+
     # PostgreSQL
     postgres_user: str = "detectx"
     postgres_password: str = "detectx"
@@ -40,7 +44,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "change_me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 480  # 8 h : confortable en dev mono-hôte (raccourcir en prod)
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"  # le dashboard n'écoute que sur la boucle locale
 
     # LLM
     llm_provider: str = "ollama"

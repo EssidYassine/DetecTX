@@ -7,3 +7,4 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("EVENTS_BACKEND", "sql")
 os.environ.setdefault("JWT_SECRET", "test-secret-not-for-production")
 os.environ.setdefault("AUDIT_LOG_PATH", "")  # audit en console seulement : les tests n'écrivent pas le vrai journal
+os.environ.setdefault("LOCAL_COLLECTOR", "false")  # les tests ne lisent pas les journaux du poste

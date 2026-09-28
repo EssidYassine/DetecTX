@@ -2,10 +2,10 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db import Base
+from app.db import Base, UTCDateTime
 
 
 class AppShortcut(Base):
@@ -17,5 +17,5 @@ class AppShortcut(Base):
     icon: Mapped[str | None] = mapped_column(String(8), nullable=True)  # emoji optionnel
     hotkey: Mapped[str | None] = mapped_column(String(64), nullable=True)  # ex. "ctrl+alt+k" (global)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )

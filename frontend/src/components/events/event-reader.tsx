@@ -55,6 +55,7 @@ export function EventReader({ eventId, onClose, className = "" }: { eventId: str
         {detail && (
           <>
             <p className="text-sm font-semibold">{k?.title ?? `Événement ${detail.event_id ?? ""}`.trim()}</p>
+            {detail.summary && detail.summary !== k?.title && <p className="mt-0.5 break-words text-[13px]">{detail.summary}</p>}
             <p className="text-[11px] text-muted">
               {channelLabel(detail.channel)} · ID <span className="font-mono">{detail.event_id ?? "—"}</span> · {fmtDateTime(detail.timestamp)}
               {detail.computer && ` · ${detail.computer}`}

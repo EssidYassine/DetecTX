@@ -72,19 +72,19 @@ def test_hunts_are_well_formed():
 
 
 # ─────────────────────────────── santé de la collecte (pure)
-def _beat(minutes_ago: int, admin: bool | None = True) -> collection.Heartbeat:
-    return collection.Heartbeat("BINGO", NOW - timedelta(minutes=minutes_ago), "1.1", admin, 15)
+def _beat(minutes_ago: int, admin: bool | None = True, kind: str = "integre") -> collection.Heartbeat:
+    return collection.Heartbeat("BINGO", kind, NOW - timedelta(minutes=minutes_ago), "1.1", admin, 15)
 
 
-def test_health_down_when_agent_silent():
-    h = collection.assess({"System": (NOW - timedelta(hours=47), 0)}, _beat(47 * 60), SYSMON_ON, now=NOW)
+def test_health_down_when_no_collector_alive():
+    h = collection.assess({"System": (NOW - timedelta(hours=47), 0)}, [_beat(47 * 60)], SYSMON_ON, now=NOW)
     assert h["status"] == "down" and "47 h" in h["summary"]
     assert next(c for c in h["channels"] if c["channel"] == "System")["status"] == "stale"
 
 
 def test_health_degraded_without_admin_or_sysmon():
     recent = {"System": (NOW - timedelta(minutes=5), 12)}
-    h = collection.assess(recent, _beat(0, admin=False), SYSMON_OFF, now=NOW)
+    h = collection.assess(recent, [_beat(0, admin=False)], SYSMON_OFF, now=NOW)
     assert h["status"] == "degraded" and "administrateur" in h["summary"] and "Sysmon" in h["summary"]
     sysmon_row = next(c for c in h["channels"] if "Sysmon" in c["channel"])
     assert sysmon_row["status"] == "missing" and sysmon_row["hint"]
@@ -92,26 +92,107 @@ def test_health_degraded_without_admin_or_sysmon():
     assert security["status"] == "missing" and "administrateur" in security["hint"]
 
 
-def test_health_ok_and_quiet_channels():
+def test_health_ok_quiet_and_readability():
     stats = {c: (NOW - timedelta(minutes=2), 3) for c, _ in collection.EXPECTED}
-    stats["Application"] = (NOW - timedelta(days=3), 0)  # journal calme, agent vivant
-    h = collection.assess(stats, _beat(0), SYSMON_ON, now=NOW)
-    assert h["status"] == "ok" and h["agent"]["alive"]
-    assert next(c for c in h["channels"] if c["channel"] == "Application")["status"] == "quiet"
+    stats["Application"] = (NOW - timedelta(days=3), 0)  # journal calme, collecteur vivant
+    del stats["Microsoft-Windows-TaskScheduler/Operational"]  # lisible mais vide
+    readable = {"Microsoft-Windows-TaskScheduler/Operational": "ok", "Microsoft-Windows-WMI-Activity/Operational": "denied"}
+    del stats["Microsoft-Windows-WMI-Activity/Operational"]
+    h = collection.assess(stats, [_beat(0, kind="integre", admin=False), _beat(0, kind="agent", admin=True)], SYSMON_ON, readable, now=NOW)
+    assert h["status"] == "ok" and len(h["collectors"]) == 2  # l'agent admin couvre le journal Sécurité
+    row = {c["channel"]: c for c in h["channels"]}
+    assert row["Application"]["status"] == "quiet"
+    assert row["Microsoft-Windows-TaskScheduler/Operational"]["status"] == "quiet"
+    assert row["Microsoft-Windows-WMI-Activity/Operational"]["status"] == "missing"
 
 
-def test_health_without_any_agent():
-    h = collection.assess({}, None, SYSMON_ON, now=NOW)
-    assert h["status"] == "down" and "Aucun agent" in h["summary"]
+def test_health_without_any_collector():
+    h = collection.assess({}, [], SYSMON_ON, now=NOW)
+    assert h["status"] == "down" and "Aucun collecteur" in h["summary"]
+
+
+# ─────────────────────────────── narrateur (phrases lisibles)
+def test_narrator_uses_real_fields_and_falls_back():
+    from app.detection.event_narrator import summarize
+
+    wifi = "Microsoft-Windows-WLAN-AutoConfig/Operational"
+    assert summarize(wifi, 8001, {"SSID": "Maison"}, None) == "Connecté au Wi-Fi « Maison »"
+    fw = "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall"
+    s = summarize(fw, 2097, {"RuleName": "Node.js", "ApplicationPath": r"C:\Program Files\nodejs\node.exe"}, None)
+    assert s.startswith("Règle de pare-feu ajoutée : Node.js")
+    # Champ manquant : aucune invention, repli sur la 1re ligne du message.
+    assert summarize(wifi, 8001, {}, "Service WLAN connecté.\nDétails…") == "Service WLAN connecté."
+    ps = summarize("Windows PowerShell", 400, {}, "Engine state…\n\tHostApplication=powershell.exe -enc AAA\n")
+    assert ps == "PowerShell démarré : powershell.exe -enc AAA"
+    full = summarize("Windows PowerShell", 400, {}, "HostApplication=C:\\WINDOWS\\System32\\powershell.exe -NoProfile\n")
+    assert full == "PowerShell démarré : powershell.exe -NoProfile"  # sans le dossier de l'exécutable
+    script = summarize("Microsoft-Windows-PowerShell/Operational", 4104, {"ScriptBlockText": "Get-Item C:\\x " + "a" * 200}, None)
+    assert script.startswith("Script PowerShell : Get-Item")  # un script se lit par le début
+    # Segment facultatif : une appli empaquetée n'a pas de chemin, la phrase reste valable sans.
+    assert summarize(fw, 2097, {"RuleName": "Copilot", "ApplicationPath": ""}, "A rule has been added…") == "Règle de pare-feu ajoutée : Copilot"
+    assert summarize(fw, 2052, {"RuleName": "Copilot", "ModifyingApplication": "-"}, None) == "Règle de pare-feu supprimée : Copilot"
+    ci = summarize("Microsoft-Windows-CodeIntegrity/Operational", 3033, {"FileNameBuffer": r"\Device\HarddiskVolume3\Program Files\App\x.dll"}, None)
+    assert ci == r"Signature non conforme : \Program Files\App\x.dll"  # chemin noyau rendu lisible
+    # Le champ obligatoire, lui, reste exigé.
+    assert summarize(fw, 2097, {"ApplicationPath": r"C:\x.exe"}, "A rule has been added…") == "A rule has been added…"
+
+
+def test_feed_folds_bursts_of_identical_events():
+    from app.schemas.events import FeedItem
+
+    t0 = datetime(2026, 9, 28, 10, 7, 18, tzinfo=timezone.utc)
+    fw = "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall"
+
+    def item(i: int, seconds: int, event_id: int, summary: str) -> FeedItem:
+        return FeedItem(id=f"e{i}", timestamp=t0 - timedelta(seconds=seconds), channel=fw, theme="defense", event_id=event_id, title=None, summary=summary, level="medium")
+
+    items = [  # du plus récent au plus ancien, rafales entrelacées comme dans le vrai journal
+        item(1, 0, 2097, "ajoutée : Copilot"),
+        item(2, 0, 2052, "supprimée : Copilot"),
+        item(3, 1, 2097, "ajoutée : Copilot"),
+        item(4, 1, 2052, "supprimée : Copilot"),
+        item(5, 600, 2097, "ajoutée : Copilot"),  # 10 min plus tôt : un autre fait
+    ]
+    folded = event_insights.fold_feed(items)
+    assert [(f.id, f.count) for f in folded] == [("e1", 2), ("e2", 2), ("e5", 1)]
+
+
+# ─────────────────────────────── collecteur intégré (analyse XML, sans lire le poste)
+WIN_XML = """<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>
+<Provider Name='Microsoft-Windows-WLAN-AutoConfig'/><EventID>8001</EventID><Level>4</Level>
+<TimeCreated SystemTime='2026-09-27T21:49:03.1234567Z'/><EventRecordID>1234</EventRecordID>
+<Channel>Microsoft-Windows-WLAN-AutoConfig/Operational</Channel><Computer>BINGO</Computer></System>
+<EventData><Data Name='SSID'>Maison</Data><Data>sans nom</Data></EventData></Event>"""
+
+
+def test_collector_parses_windows_xml():
+    from app.services import winlog_collector as wc
+
+    ev = wc.parse_event_xml(WIN_XML)
+    assert ev["event_id"] == 8001 and ev["record_id"] == 1234 and ev["level"] == "Information"
+    assert ev["fields"] == {"SSID": "Maison", "Data2": "sans nom"}
+    assert ev["timestamp"].tzinfo is not None and ev["computer"] == "BINGO"
+    src = wc.Source("X", (8001, 8003))
+    assert wc._xpath(src, 99) == "*[System[(EventID=8001 or EventID=8003) and EventRecordID>99]]"
+    assert "timediff" in wc._xpath(wc.Source("Y"), None)
+
+
+def test_collector_state_roundtrip(tmp_path, monkeypatch):
+    from app.services import winlog_collector as wc
+
+    monkeypatch.setattr(wc.settings, "collector_state_path", str(tmp_path / "state.json"))
+    wc.save_state({"System": 42})
+    assert wc.load_state() == {"System": 42}
 
 
 # ─────────────────────────────── relief horaire, chasses, lecteur (SQL)
-def test_histogram_buckets_and_alert_beacons(db):
+def test_histogram_by_theme_and_alert_beacons(db):
     now = datetime.now(timezone.utc)
     _ingest(
         _event("System", 7045, now - timedelta(minutes=5)),
         _event("System", 7036, now - timedelta(minutes=10)),
         _event("Security", 4625, now - timedelta(hours=3, minutes=1)),
+        _event("Microsoft-Windows-WLAN-AutoConfig/Operational", 8001, now - timedelta(minutes=2)),
         _event("Security", 4625, now - timedelta(hours=60)),  # hors fenêtre de 48 h
     )
 
@@ -122,9 +203,52 @@ def test_histogram_buckets_and_alert_beacons(db):
 
     asyncio.run(add_alert())
     h = asyncio.run(event_insights.histogram(48))
-    assert h.hours == 48 and h.channels == ["Security", "System"]  # ordre des journaux attendus
-    assert h.counts["System"][-1] == 2 and sum(h.counts["Security"]) == 1
-    assert h.alerts[0].channel == "Security" and h.alerts[0].severity == "high" and h.alerts[0].bin == 47 - 3
+    assert [lane.key for lane in h.lanes] == ["sessions", "defense", "execution", "network", "system", "apps"]
+    assert h.counts["system"][-1] == 2 and sum(h.counts["sessions"]) == 1 and h.counts["network"][-1] == 1
+    assert h.alerts[0].lane == "sessions" and h.alerts[0].severity == "high" and h.alerts[0].bin == 47 - 3
+
+
+def test_ingest_is_idempotent(db):
+    now = datetime.now(timezone.utc)
+    first = _event("System", 7045, now, record_id=77)
+    _ingest(first, _event("System", 7045, now, record_id=77))  # doublon dans le même lot
+    _ingest(first)  # renvoyé plus tard (agent + collecteur intégré)
+    assert asyncio.run(ev.search_events()).total == 1
+
+
+def test_timestamps_leave_sqlite_in_utc(db):
+    """SQLite perd le fuseau : sans correction, l'API sortait « 10:18 » sans « Z » et le navigateur
+    affichait l'heure décalée (UTC lu comme local)."""
+    at = datetime(2026, 9, 28, 12, 18, 22, tzinfo=timezone(timedelta(hours=2)))  # 10:18:22 UTC
+    _ingest(_event("System", 7045, at, record_id=5))
+    item = asyncio.run(ev.search_events()).items[0]
+    assert item.timestamp == datetime(2026, 9, 28, 10, 18, 22, tzinfo=timezone.utc)
+    assert item.model_dump_json().count("+00:00") + item.model_dump_json().count("Z") >= 1
+    # La tranche horaire (bornes « aware ») retrouve bien l'événement.
+    since = datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc)
+    assert asyncio.run(ev.search_events(since=since, until=since + timedelta(hours=1))).total == 1
+
+
+def test_keyword_search_is_literal(db):
+    now = datetime.now(timezone.utc)
+    _ingest(
+        _event("DeTecTX-FileMonitor", 1, now, "CREATED C:\\Users\\x\\Startup\\evil.lnk"),
+        _event("DeTecTX-FileMonitor", 1, now, "CREATED C:\\Users\\x\\Documents\\a_b.txt"),
+    )
+    assert asyncio.run(ev.search_events(keywords=["\\Startup\\"])).total == 1
+    assert asyncio.run(ev.search_events(q="a_b")).total == 1
+    assert asyncio.run(ev.search_events(q="a%b")).total == 0  # % n'est pas un joker
+
+
+def test_feed_keeps_notable_events_as_sentences(db):
+    now = datetime.now(timezone.utc)
+    _ingest(
+        _event("Microsoft-Windows-WLAN-AutoConfig/Operational", 8001, now, "x", record_id=1),
+        _event("System", 10016, now, "bruit DCOM", record_id=2),  # bruit connu : écarté
+    )
+    items = asyncio.run(event_insights.feed(60, 10))
+    assert [i.channel for i in items] == ["Microsoft-Windows-WLAN-AutoConfig/Operational"]
+    assert items[0].theme == "network"
 
 
 def test_hunt_filters_and_counts(db):
@@ -191,8 +315,8 @@ def test_heartbeat_ingest(client, db, monkeypatch):
     monkeypatch.setattr(collection, "_beats", {})
     res = client.post("/events/ingest", json={"events": [], "agent": {"computer": "BINGO", "version": "1.1", "admin": True, "interval_sec": 15}})
     assert res.status_code == 200 and res.json()["indexed"] == 0
-    beat = collection.latest_heartbeat()
-    assert beat.computer == "BINGO" and beat.admin is True
+    beat = collection.heartbeats()[0]
+    assert beat.computer == "BINGO" and beat.kind == "agent" and beat.admin is True
     assert client.post("/events/ingest", json={"events": [], "agent": {"computer": "", "interval_sec": 0}}).status_code == 422
 
 
@@ -203,3 +327,6 @@ def test_api_validation_and_routes(client, db):
     assert client.get("/events/health").json()["status"] in ("ok", "degraded", "down")
     assert client.get("/events/abc$def").status_code == 422
     assert client.get("/events/123456").status_code == 404
+    assert client.get("/events", params={"theme": "network"}).status_code == 200
+    assert client.get("/events", params={"theme": "inconnu"}).status_code == 404
+    assert client.get("/events/feed").status_code == 200

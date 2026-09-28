@@ -13,6 +13,12 @@ SYSTEM = "System"
 POWERSHELL = "Microsoft-Windows-PowerShell/Operational"
 SYSMON = "Microsoft-Windows-Sysmon/Operational"
 FILEMON = "DeTecTX-FileMonitor"
+DEFENDER = "Microsoft-Windows-Windows Defender/Operational"
+FIREWALL = "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall"
+SESSIONS = "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational"
+BITS = "Microsoft-Windows-Bits-Client/Operational"
+PNP = "Microsoft-Windows-Kernel-PnP/Configuration"
+WMI = "Microsoft-Windows-WMI-Activity/Operational"
 
 
 @dataclass(frozen=True)
@@ -31,6 +37,13 @@ class Hunt:
 
 
 HUNTS: tuple[Hunt, ...] = (
+    Hunt("defender-threats", "Menaces Defender", "Defender a-t-il détecté un logiciel malveillant ?", (DEFENDER,), (1006, 1015, 1116, 1117, 1118), attack="T1204", level="high"),
+    Hunt("defenses-off", "Défenses coupées ou modifiées", "La protection de Defender a-t-elle été désactivée ou modifiée ?", (DEFENDER,), (5001, 5007, 5010, 5012), attack="T1562.001", level="high"),
+    Hunt("firewall-changes", "Pare-feu modifié", "Des règles du pare-feu ont-elles été ajoutées ou supprimées ?", (FIREWALL,), (2004, 2005, 2006, 2033, 2052, 2097, 2099), attack="T1562.004"),
+    Hunt("sessions", "Ouvertures de session", "Qui a ouvert une session, et depuis où ?", (SESSIONS,), (21, 25), attack="T1021.001", level="low"),
+    Hunt("bits-downloads", "Téléchargements BITS", "Des fichiers ont-ils été téléchargés en arrière-plan ?", (BITS,), (59,), ("http",), attack="T1197", level="low"),
+    Hunt("usb-devices", "Supports amovibles", "Une clé USB ou un disque externe a-t-il été branché ?", (PNP,), (400,), ("USBSTOR", "SCSI\\Disk", "USB\\VID"), attack="T1091", level="low"),
+    Hunt("wmi-persistence", "Persistance WMI", "Un abonnement WMI permanent a-t-il été créé ?", (WMI,), (5861,), attack="T1546.003", level="high"),
     Hunt("logon-failures", "Échecs de connexion", "Quelqu'un essaie-t-il de deviner un mot de passe ?", (SECURITY,), (4625, 4740), attack="T1110", requires=("admin",)),
     Hunt("new-accounts", "Comptes créés ou promus", "Un compte a-t-il été créé ou ajouté aux administrateurs ?", (SECURITY,), (4720, 4722, 4732), attack="T1136.001", level="high", requires=("admin",)),
     Hunt("new-services", "Services installés", "Un programme s'est-il installé comme service ?", (SYSTEM, SECURITY), (7045, 4697), attack="T1543.003", level="high"),

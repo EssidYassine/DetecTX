@@ -2,10 +2,10 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db import Base
+from app.db import Base, UTCDateTime
 
 
 class Alert(Base):
@@ -26,15 +26,15 @@ class Alert(Base):
     channel: Mapped[str | None] = mapped_column(String(255), nullable=True)
     event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     event_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    event_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    event_timestamp: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     status: Mapped[str] = mapped_column(String(20), default="new", nullable=False)  # new|ack|closed
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     # Triage (traçabilité : qui a trié, quand, avec quelle conclusion).
     resolution: Mapped[str | None] = mapped_column(String(20), nullable=True)  # true_positive|false_positive|benign
     triaged_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    triaged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    triaged_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)

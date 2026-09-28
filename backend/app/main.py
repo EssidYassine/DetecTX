@@ -1,5 +1,7 @@
 """Point d'entrée de l'API DeTecTX."""
 
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 
@@ -9,7 +11,11 @@ from fastapi.responses import JSONResponse
 from opensearchpy.exceptions import ConnectionError as OpenSearchConnectionError
 from sqlalchemy import inspect, text
 
-from app import __version__
+# Import des modèles pour qu'ils soient enregistrés dans Base.metadata
+from app import (
+    __version__,
+    models,
+)
 from app.audit import configure_audit_log
 from app.clients import get_opensearch, get_redis
 from app.config import get_settings
@@ -29,10 +35,8 @@ from app.routers import (
     system_control,
     threatintel,
 )
+from app.services import winlog_collector
 from app.services.events import ensure_events_index
-
-# Import des modèles pour qu'ils soient enregistrés dans Base.metadata
-from app import models  # noqa: F401
 
 logger = logging.getLogger("detectx")
 settings = get_settings()
@@ -71,15 +75,22 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_add_missing_columns)
+        # Dédoublonnage de l'ingestion (journal, RecordID) : index créé s'il manque.
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_channel_record ON events (channel, record_id)"))
 
     # Bootstrap de l'index OpenSearch — non bloquant s'il n'est pas encore up.
     try:
         await ensure_events_index()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("index events non initialisé (OpenSearch indisponible ?): %s", exc)
 
     logger.info("DeTecTX backend %s démarré (provider LLM: %s)", __version__, settings.llm_provider)
+    collector = asyncio.create_task(winlog_collector.run_forever()) if winlog_collector.is_enabled() else None
     yield
+    if collector is not None:
+        collector.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await collector
     await engine.dispose()
     await get_opensearch().close()
     await get_redis().aclose()
@@ -124,7 +135,7 @@ async def _check_postgres() -> bool:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         return True
-    except Exception as exc:  # noqa: BLE001 — on veut un statut, pas de crash
+    except Exception as exc:
         logger.warning("healthcheck postgres KO: %s", exc)
         return False
 
@@ -132,7 +143,7 @@ async def _check_postgres() -> bool:
 async def _check_opensearch() -> bool:
     try:
         return await get_opensearch().ping()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("healthcheck opensearch KO: %s", exc)
         return False
 
@@ -140,7 +151,7 @@ async def _check_opensearch() -> bool:
 async def _check_redis() -> bool:
     try:
         return bool(await get_redis().ping())
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("healthcheck redis KO: %s", exc)
         return False
 

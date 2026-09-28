@@ -2,14 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { searchEvents, type CollectionHealth, type EventPage, type Hunt } from "@/lib/api";
-import { channelLabel, fmtDateTime, LANES, LIST_WINDOWS, type ListWindow } from "@/lib/events-ui";
+import { channelLabel, fmtDateTime, LIST_WINDOWS, SOURCES, THEMES, type ListWindow } from "@/lib/events-ui";
 import { LevelBadge } from "@/components/ui";
+import { ThemeIcon } from "./theme-icon";
 
 export const PAGE_SIZE = 30;
 
 export interface EventQuery {
   hunt: string | null;
   channel: string; // "" = tous
+  theme: string | null; // thème choisi dans le relief (remplace le journal)
   eventId: number | null;
   q: string;
   window: ListWindow;
@@ -53,7 +55,8 @@ export function HuntPanel({ query, onQuery, hunts, health, selected, onOpen, ref
       limit: PAGE_SIZE,
       q: query.q || undefined,
       hunt: query.hunt ?? undefined,
-      channel: query.hunt ? undefined : query.channel || undefined,
+      channel: query.hunt || query.theme ? undefined : query.channel || undefined,
+      theme: query.hunt ? undefined : (query.theme ?? undefined),
       eventId: query.hunt ? undefined : (query.eventId ?? undefined),
       minutes,
       since: query.slice?.since,
@@ -67,15 +70,15 @@ export function HuntPanel({ query, onQuery, hunts, health, selected, onOpen, ref
   }, [key, query]);
 
   const page = result?.page ?? null;
-  const filtered = query.hunt !== null || query.channel !== "" || query.eventId !== null || query.q !== "" || query.slice !== null;
+  const filtered = query.hunt !== null || query.theme !== null || query.channel !== "" || query.eventId !== null || query.q !== "" || query.slice !== null;
   const total = page?.total ?? 0;
   const first = total === 0 ? 0 : query.page * PAGE_SIZE + 1;
   const last = Math.min(total, (query.page + 1) * PAGE_SIZE);
   const unmet = (h: Hunt) =>
     h.requires.includes("sysmon") && health && !health.sysmon.running
       ? "Nécessite Sysmon"
-      : h.requires.includes("admin") && health?.agent.admin === false
-        ? "Nécessite l'agent en administrateur"
+      : h.requires.includes("admin") && health && !health.collectors.some((c) => c.alive && c.admin)
+        ? "Nécessite l'agent en administrateur (journal Sécurité)"
         : null;
   const applyId = () => {
     const n = idText.trim() === "" ? null : Number(idText);
@@ -98,7 +101,7 @@ export function HuntPanel({ query, onQuery, hunts, health, selected, onOpen, ref
           return (
             <button
               key={h.id}
-              onClick={() => onQuery({ hunt: active ? null : h.id, channel: "", eventId: null, slice: null })}
+              onClick={() => onQuery({ hunt: active ? null : h.id, channel: "", theme: null, eventId: null, slice: null })}
               aria-pressed={active}
               title={`${h.question}${h.attack ? ` · ATT&CK ${h.attack}` : ""}${blocked ? ` · ${blocked}` : ""}`}
               className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] transition ${
@@ -120,19 +123,18 @@ export function HuntPanel({ query, onQuery, hunts, health, selected, onOpen, ref
       {/* Filtres */}
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2 text-xs">
         <select
-          value={query.hunt ? "" : query.channel}
-          onChange={(e) => onQuery({ channel: e.target.value, hunt: null })}
+          value={query.hunt || query.theme ? "" : query.channel}
+          onChange={(e) => onQuery({ channel: e.target.value, hunt: null, theme: null })}
           disabled={query.hunt !== null}
           aria-label="Journal"
           className="rounded-md border border-line bg-surface-2 px-2 py-1 outline-none focus:border-accent disabled:opacity-50"
         >
           <option value="">Tous les journaux</option>
-          {LANES.map((l) => (
-            <option key={l.channel} value={l.channel}>
-              {l.label}
+          {SOURCES.map((s) => (
+            <option key={s.channel} value={s.channel}>
+              {s.label}
             </option>
           ))}
-          <option value="DeTecTX-LogFile">Fichiers .log</option>
         </select>
         <input
           value={idText}
@@ -152,6 +154,15 @@ export function HuntPanel({ query, onQuery, hunts, health, selected, onOpen, ref
           aria-label="Recherche dans le message"
           className="min-w-40 flex-1 rounded-md border border-line bg-surface-2 px-2.5 py-1 outline-none focus:border-accent"
         />
+        {query.theme && THEMES[query.theme] && (
+          <span className="flex items-center gap-1.5 rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-accent">
+            <ThemeIcon icon={THEMES[query.theme].icon} className="h-3.5 w-3.5" />
+            {THEMES[query.theme].label}
+            <button onClick={() => onQuery({ theme: null })} className="text-muted hover:text-foreground" aria-label="Retirer le thème">
+              ✕
+            </button>
+          </span>
+        )}
         {query.slice ? (
           <span className="flex items-center gap-1.5 rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-accent">
             {query.slice.label}
@@ -209,7 +220,13 @@ export function HuntPanel({ query, onQuery, hunts, health, selected, onOpen, ref
                 <td className="px-2 py-1.5">
                   <span className="block truncate">
                     <span className="font-mono text-muted">{e.event_id ?? "—"}</span>
-                    {e.title ? <span className="ml-1.5 font-medium">{e.title}</span> : <span className="ml-1.5 text-muted">{e.message?.slice(0, 120)}</span>}
+                    {e.summary || e.title ? (
+                      <span className="ml-1.5 font-medium" title={e.title ?? undefined}>
+                        {e.summary ?? e.title}
+                      </span>
+                    ) : (
+                      <span className="ml-1.5 text-muted">{e.message?.slice(0, 160)}</span>
+                    )}
                   </span>
                 </td>
                 <td className="px-4 py-1.5 text-right">

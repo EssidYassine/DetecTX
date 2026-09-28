@@ -3,10 +3,10 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db import Base
+from app.db import Base, UTCDateTime
 
 
 class CustomRule(Base):
@@ -27,5 +27,5 @@ class CustomRule(Base):
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )

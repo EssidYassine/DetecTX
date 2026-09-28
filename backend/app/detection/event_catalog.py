@@ -21,15 +21,31 @@ class EventKnowledge:
     attack: str | None = None
 
 
+# Journaux « Microsoft-Windows-… » -> famille courte (les Event IDs ne sont uniques que par famille).
+_FAMILIES = (
+    ("sysmon", "Sysmon"),
+    ("powershell", "PowerShell"),
+    ("windows defender", "Defender"),
+    ("windows firewall", "Firewall"),
+    ("terminalservices-localsessionmanager", "Sessions"),
+    ("bits-client", "BITS"),
+    ("kernel-pnp", "PnP"),
+    ("wlan-autoconfig", "WLAN"),
+    ("networkprofile", "NetworkProfile"),
+    ("codeintegrity", "CodeIntegrity"),
+    ("wmi-activity", "WMI"),
+    ("taskscheduler", "TaskScheduler"),
+    ("detectx-filemonitor", "FileMonitor"),
+    ("detectx-logfile", "LogFile"),
+)
+
+
 def family(channel: str | None) -> str:
-    """Famille d'un journal : Security, System, Application, PowerShell, Sysmon, DeTecTX-…"""
+    """Famille d'un journal : Security, System, Application, PowerShell, Sysmon, Defender…"""
     c = (channel or "").lower()
-    if "sysmon" in c:
-        return "Sysmon"
-    if "powershell" in c:
-        return "PowerShell"
-    if c.startswith("detectx-filemonitor"):
-        return "FileMonitor"
+    for needle, name in _FAMILIES:
+        if needle in c:
+            return name
     for name in ("Security", "System", "Application"):
         if c == name.lower():
             return name
@@ -102,6 +118,53 @@ CATALOG: dict[tuple[str, int], EventKnowledge] = {
     ("Sysmon", 23): K("Fichier supprimé (archivé)", "Un fichier a été supprimé et conservé par Sysmon.", "Récupérer un outil effacé par l'attaquant.", "low", "T1070.004"),
     ("Sysmon", 25): K("Altération de processus", "L'image d'un processus a été modifiée en mémoire.", "Process hollowing / herpaderping.", "high", "T1055.012"),
     ("Sysmon", 26): K("Fichier supprimé", "Un fichier a été supprimé.", "Nettoyage de traces.", "low", "T1070.004"),
+    ("PowerShell", 400): K("Moteur PowerShell démarré", "Une session PowerShell a démarré (la ligne de commande est dans le message).", "Révèle les commandes lancées, y compris en PowerShell 2 (sans journalisation des scripts).", "low", "T1059.001"),
+    ("PowerShell", 403): K("Moteur PowerShell arrêté", "Une session PowerShell s'est terminée.", "Donne la durée d'une session PowerShell.", "info"),
+    # ── Windows Defender
+    ("Defender", 1006): K("Logiciel malveillant détecté (analyse)", "Une analyse Defender a trouvé un logiciel malveillant ou indésirable.", "Menace présente sur le poste.", "high", "T1204"),
+    ("Defender", 1015): K("Comportement suspect détecté", "Defender a détecté un comportement suspect.", "Signal comportemental : à examiner rapidement.", "high"),
+    ("Defender", 1116): K("Menace détectée", "La protection en temps réel a détecté une menace.", "Un fichier ou un processus malveillant a été vu sur le poste.", "high", "T1204"),
+    ("Defender", 1117): K("Action contre une menace", "Defender a mis en quarantaine, supprimé ou autorisé une menace.", "Vérifier que l'action a réussi.", "medium"),
+    ("Defender", 1118): K("Échec de l'action contre une menace", "Defender n'a pas réussi à neutraliser une menace.", "La menace est peut-être toujours active.", "high"),
+    ("Defender", 5001): K("Protection en temps réel désactivée", "La protection en temps réel de Defender a été coupée.", "Premier geste d'un attaquant avant de déposer ses outils.", "high", "T1562.001"),
+    ("Defender", 5007): K("Configuration de Defender modifiée", "Un paramètre de Defender a changé (exclusions, protections…).", "Une exclusion ajoutée peut cacher un logiciel malveillant.", "medium", "T1562.001"),
+    ("Defender", 5010): K("Analyse antispyware désactivée", "Une protection de Defender a été désactivée.", "Affaiblit la défense du poste.", "high", "T1562.001"),
+    ("Defender", 5012): K("Analyse antivirus désactivée", "L'analyse antivirus de Defender a été désactivée.", "Affaiblit la défense du poste.", "high", "T1562.001"),
+    # ── Pare-feu Windows
+    ("Firewall", 2004): K("Règle ajoutée au pare-feu", "Une règle a été ajoutée au pare-feu Windows.", "Un programme peut s'ouvrir un accès entrant.", "medium", "T1562.004"),
+    ("Firewall", 2005): K("Règle du pare-feu modifiée", "Une règle existante du pare-feu a changé.", "Affaiblir une règle est plus discret qu'en créer une.", "medium", "T1562.004"),
+    ("Firewall", 2006): K("Règle supprimée du pare-feu", "Une règle du pare-feu a été supprimée.", "Peut retirer une protection.", "low", "T1562.004"),
+    ("Firewall", 2033): K("Toutes les règles du pare-feu supprimées", "L'ensemble des règles a été effacé.", "Neutralise le pare-feu d'un coup.", "high", "T1562.004"),
+    ("Firewall", 2097): K("Règle ajoutée au pare-feu", "Une règle a été ajoutée au pare-feu Windows.", "Un programme peut s'ouvrir un accès entrant.", "medium", "T1562.004"),
+    ("Firewall", 2099): K("Règle du pare-feu modifiée", "Une règle existante du pare-feu a changé.", "Affaiblir une règle est plus discret qu'en créer une.", "medium", "T1562.004"),
+    # ── Sessions (bureau à distance et locales)
+    ("Sessions", 21): K("Ouverture de session", "Un utilisateur a ouvert une session (locale ou à distance).", "Depuis une adresse distante : accès par bureau à distance.", "low", "T1021.001"),
+    ("Sessions", 23): K("Fermeture de session", "Un utilisateur a fermé sa session.", "Chronologie des sessions.", "info"),
+    ("Sessions", 24): K("Session déconnectée", "Une session a été déconnectée sans être fermée.", "Chronologie des sessions.", "info"),
+    ("Sessions", 25): K("Reconnexion à une session", "Un utilisateur s'est reconnecté à une session existante.", "Depuis une adresse distante : accès par bureau à distance.", "low", "T1021.001"),
+    # ── BITS (transferts en arrière-plan)
+    ("BITS", 3): K("Tâche de transfert BITS créée", "Un programme a créé un transfert en arrière-plan.", "BITS est détourné pour télécharger des charges discrètement.", "low", "T1197"),
+    ("BITS", 59): K("Téléchargement BITS démarré", "Un transfert BITS a commencé (l'URL est dans les champs).", "Vérifier l'URL : les logiciels malveillants s'en servent pour se télécharger.", "low", "T1197"),
+    ("BITS", 60): K("Téléchargement BITS terminé", "Un transfert BITS s'est terminé.", "Complète l'événement 59.", "info", "T1197"),
+    # ── Périphériques
+    ("PnP", 400): K("Périphérique configuré", "Windows a installé ou configuré un périphérique (clé USB, disque, carte…).", "Un support amovible peut servir à introduire ou exfiltrer des données.", "low", "T1091"),
+    ("PnP", 410): K("Périphérique démarré", "Un périphérique a été démarré par Windows.", "Complète la chronologie des branchements.", "info"),
+    ("PnP", 420): K("Périphérique supprimé", "Un périphérique a été retiré de la configuration.", "Chronologie des branchements.", "info"),
+    # ── Réseau
+    ("WLAN", 8001): K("Connexion Wi-Fi", "Le poste s'est connecté à un réseau Wi-Fi.", "Un réseau public expose davantage le poste.", "info"),
+    ("WLAN", 8003): K("Déconnexion Wi-Fi", "Le poste s'est déconnecté d'un réseau Wi-Fi.", "Chronologie réseau.", "info"),
+    ("NetworkProfile", 10000): K("Réseau connecté", "Le poste a rejoint un réseau (avec sa catégorie : public, privé…).", "La catégorie décide des règles du pare-feu appliquées.", "info"),
+    ("NetworkProfile", 10001): K("Réseau déconnecté", "Le poste a quitté un réseau.", "Chronologie réseau.", "info"),
+    # ── Intégrité du code
+    ("CodeIntegrity", 3033): K("Code non conforme à la signature", "Un binaire ne respectait pas les exigences de signature.", "Pilote ou DLL non signé : possible code malveillant.", "medium", "T1553"),
+    ("CodeIntegrity", 3077): K("Chargement de code bloqué", "Windows a empêché le chargement d'un fichier.", "Une tentative d'exécution a été stoppée : à identifier.", "medium", "T1553"),
+    # ── WMI
+    ("WMI", 5860): K("Abonnement WMI temporaire", "Un consommateur d'événements WMI temporaire a été enregistré.", "WMI permet d'exécuter du code sur événement.", "medium", "T1546.003"),
+    ("WMI", 5861): K("Abonnement WMI permanent", "Un consommateur d'événements WMI permanent a été enregistré.", "Technique de persistance furtive, sans fichier au démarrage.", "high", "T1546.003"),
+    # ── Planificateur de tâches
+    ("TaskScheduler", 106): K("Tâche planifiée enregistrée", "Une tâche planifiée a été créée.", "Persistance classique.", "medium", "T1053.005"),
+    ("TaskScheduler", 140): K("Tâche planifiée modifiée", "Une tâche planifiée a été mise à jour.", "Détourner une tâche légitime est discret.", "medium", "T1053.005"),
+    ("TaskScheduler", 141): K("Tâche planifiée supprimée", "Une tâche planifiée a été retirée.", "Peut accompagner un nettoyage de traces.", "low", "T1053.005"),
     # ── Agent DeTecTX
     ("FileMonitor", 1): K("Fichier créé", "L'agent DeTecTX a vu apparaître un fichier dans un dossier surveillé.", "Dans « Démarrage » : programme lancé à chaque ouverture de session.", "low", "T1547.001"),
     ("FileMonitor", 2): K("Fichier modifié", "Un fichier surveillé a changé.", "Contexte d'activité.", "info"),
@@ -114,3 +177,28 @@ def describe(channel: str | None, event_id: int | None) -> dict | None:
         return None
     known = CATALOG.get((family(channel), event_id))
     return asdict(known) if known else None
+
+
+# ─────────────────────────────── thèmes du relief
+@dataclass(frozen=True)
+class Theme:
+    key: str
+    label: str
+    families: tuple[str, ...]
+
+
+# De l'avant vers l'arrière du relief : les thèmes rares (et graves) devant, le bruit derrière.
+THEMES: tuple[Theme, ...] = (
+    Theme("sessions", "Sessions & comptes", ("Security", "Sessions")),
+    Theme("defense", "Défense", ("Defender", "Firewall", "CodeIntegrity")),
+    Theme("execution", "Exécution", ("PowerShell", "Sysmon", "WMI", "TaskScheduler")),
+    Theme("network", "Réseau & périphériques", ("WLAN", "NetworkProfile", "PnP", "BITS")),
+    Theme("system", "Système", ("System",)),
+    Theme("apps", "Applications & fichiers", ("Application", "FileMonitor", "LogFile")),
+)
+_THEME_OF = {fam: t.key for t in THEMES for fam in t.families}
+
+
+def theme_of(channel: str | None) -> str:
+    """Thème d'un journal ; les journaux inconnus rejoignent « Applications & fichiers »."""
+    return _THEME_OF.get(family(channel), "apps")
