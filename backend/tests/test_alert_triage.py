@@ -5,11 +5,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import Base
 from app.models.alert import Alert
-from app.schemas.alerts import BulkTriage, TriageUpdate
+from app.schemas.alerts import BulkTriage, CaseTriage, TriageUpdate
 from app.services import alerts as svc
 
 
@@ -139,3 +140,86 @@ def test_filtre_de_periode_sur_la_liste():
 
     page = _run(scenario)
     assert page.total == 1 and page.items[0].id == 1
+
+
+# ─────────────────────────────── dossiers (alertes regroupées par règle)
+def _rule_alert(i: int, rule: str, severity: str, *, mitre: str | None = None, risk: int = 50, when: datetime | None = None, message: str = "") -> Alert:
+    return Alert(dedup_key=f"d{i}", rule_id=rule, rule_title=f"Titre {rule}", severity=severity, risk_score=risk, mitre=mitre, event_timestamp=when, message=message)
+
+
+def test_dossiers_regroupes_par_regle_et_tries():
+    now = datetime.now(timezone.utc)
+
+    async def scenario(session):
+        session.add_all([
+            _rule_alert(1, "mimi", "critical", mitre="T1003.001", risk=90, when=now - timedelta(hours=3), message="ancien"),
+            _rule_alert(2, "mimi", "critical", mitre="T1003.001", risk=90, when=now - timedelta(hours=1), message="récent"),
+            _rule_alert(3, "ps", "high", mitre="T1059.001", risk=70, when=now - timedelta(minutes=5)),
+            _rule_alert(4, "old", "critical", risk=95, when=now - timedelta(days=2)),
+        ])
+        await session.commit()
+        await svc.triage_alerts(session, [4], status="closed", resolution="false_positive", actor="a")
+        return await svc.list_cases(session)
+
+    page = _run(scenario)
+    assert [c.rule_id for c in page.cases] == ["mimi", "ps", "old"]  # dossier clos en dernier
+    mimi = page.cases[0]
+    assert (mimi.count, mimi.severity, mimi.risk) == (2, "critical", 90)
+    assert mimi.by_status == {"new": 2, "ack": 0, "closed": 0}
+    assert mimi.tactic == "credential-access" and mimi.latest_message == "récent"
+    assert mimi.first_seen < mimi.last_seen and mimi.last_seen.tzinfo is not None
+    s = page.summary
+    assert (s.open_alerts, s.open_cases, s.open_critical, s.closed, s.false_positive) == (3, 2, 2, 1, 1)
+    assert "credential-access" in s.tactics_hit and s.mean_triage_minutes is not None
+
+
+def test_dossiers_filtres_ouverts_et_recherche_litterale():
+    async def scenario(session):
+        session.add_all([
+            _rule_alert(1, "a", "high", message=r"C:\Temp\100%_evil.exe"),
+            _rule_alert(2, "b", "high", message=r"C:\Temp\1000_evil.exe"),
+        ])
+        await session.commit()
+        await svc.triage_alerts(session, [2], status="ack", resolution=None, actor="a")
+        opened = await svc.list_cases(session, status="open")
+        literal = await svc.list_cases(session, q="100%_")
+        return opened, literal
+
+    opened, literal = _run(scenario)
+    assert {c.rule_id for c in opened.cases} == {"a", "b"}  # ouvert = nouvelles + en cours
+    assert [c.rule_id for c in literal.cases] == ["a"]  # % et _ ne sont pas des jokers
+
+
+def test_triage_dossier_ne_touche_que_les_statuts_concernes():
+    async def scenario(session):
+        session.add_all([_rule_alert(i, "r1", "high") for i in range(1, 4)] + [_rule_alert(9, "r2", "high")])
+        await session.commit()
+        await svc.triage_alerts(session, [3], status="closed", resolution="benign", actor="a")
+        ack = await svc.triage_case(session, "r1", status="ack", resolution=None, actor="analyste")
+        closed = await svc.triage_case(session, "r1", status="closed", resolution="true_positive", actor="analyste")
+        unknown = await svc.triage_case(session, "nope", status="ack", resolution=None, actor="analyste")
+        rows = {a.dedup_key: (a.status, a.resolution) for a in (await session.scalars(select(Alert))).all()}
+        return ack, closed, unknown, rows
+
+    ack, closed, unknown, rows = _run(scenario)
+    assert ack.updated == 2  # la 3e était déjà close
+    assert closed.updated == 2  # la close « bénin » garde sa conclusion
+    assert rows["d3"] == ("closed", "benign") and rows["d1"] == ("closed", "true_positive")
+    assert rows["d9"] == ("new", None)  # l'autre dossier est intact
+    assert unknown is None
+
+
+@pytest.mark.parametrize("rule_id", ["", "a b", "x" * 121, "../etc", "r;drop"])
+def test_triage_dossier_identifiant_valide(rule_id):
+    with pytest.raises(ValidationError):
+        CaseTriage(rule_id=rule_id, status="ack")
+
+
+def test_filtre_par_regle():
+    async def scenario(session):
+        session.add_all([_rule_alert(1, "r1", "high"), _rule_alert(2, "r2", "low")])
+        await session.commit()
+        return await svc.list_alerts(session, rule_id="r2")
+
+    page = _run(scenario)
+    assert page.total == 1 and page.items[0].rule_id == "r2"

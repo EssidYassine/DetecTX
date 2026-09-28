@@ -263,6 +263,7 @@ export type Resolution = "true_positive" | "false_positive" | "benign";
 
 export interface Alert {
   id: number;
+  rule_id: string;
   rule_title: string;
   severity: "critical" | "high" | "medium" | "low";
   risk_score: number;
@@ -299,10 +300,11 @@ export async function searchAlerts(params: {
   limit?: number;
   severity?: string;
   mitre?: string;
-  status?: AlertStatus;
+  status?: AlertStatus | "open";
   since?: string; // ISO 8601, inclus
   until?: string; // ISO 8601, exclu
   q?: string;
+  ruleId?: string;
 }): Promise<AlertPage> {
   const qs = new URLSearchParams();
   qs.set("offset", String(params.offset ?? 0));
@@ -313,10 +315,78 @@ export async function searchAlerts(params: {
   if (params.since) qs.set("since", params.since);
   if (params.until) qs.set("until", params.until);
   if (params.q) qs.set("q", params.q);
+  if (params.ruleId) qs.set("rule_id", params.ruleId);
 
   const res = await fetch(`${API_URL}/alerts?${qs.toString()}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await readError(res));
   return (await res.json()) as AlertPage;
+}
+
+/** Dossier : toutes les alertes d'une même règle (5 × « Mimikatz » = 1 dossier ×5). */
+export interface AlertCase {
+  rule_id: string;
+  rule_title: string;
+  severity: Alert["severity"];
+  risk: number;
+  mitre: string | null;
+  mitre_name: string | null;
+  tactic: string | null; // identifiant ATT&CK ; null = technique hors base
+  tactic_fr: string | null;
+  count: number;
+  by_status: Record<AlertStatus, number>;
+  first_seen: string;
+  last_seen: string;
+  latest_id: number;
+  latest_message: string | null;
+  channels: string[];
+}
+
+export interface CaseSummary {
+  open_alerts: number;
+  open_cases: number;
+  open_critical: number;
+  tactics_hit: string[];
+  closed: number;
+  true_positive: number;
+  false_positive: number;
+  mean_triage_minutes: number | null;
+}
+
+export interface CasePage {
+  total: number;
+  cases: AlertCase[];
+  summary: CaseSummary;
+}
+
+export async function fetchAlertCases(params: {
+  status?: AlertStatus | "open";
+  severity?: string;
+  mitre?: string;
+  since?: string;
+  until?: string;
+  q?: string;
+}): Promise<CasePage> {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set("status", params.status);
+  if (params.severity && params.severity !== "all") qs.set("severity", params.severity);
+  if (params.mitre) qs.set("mitre", params.mitre);
+  if (params.since) qs.set("since", params.since);
+  if (params.until) qs.set("until", params.until);
+  if (params.q) qs.set("q", params.q);
+  const res = await fetch(`${API_URL}/alerts/cases?${qs.toString()}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as CasePage;
+}
+
+/** Triage d'un dossier entier (le serveur ne touche que les alertes dont le statut s'y prête). */
+export async function triageCase(ruleId: string, input: TriageInput): Promise<{ updated: number; missing: number[] }> {
+  const res = await fetch(`${API_URL}/alerts/cases/triage`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ rule_id: ruleId, ...input }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as { updated: number; missing: number[] };
 }
 
 export interface TimelineDay {

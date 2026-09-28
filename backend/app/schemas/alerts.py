@@ -62,6 +62,54 @@ class BulkTriage(TriageUpdate):
     ids: list[int] = Field(min_length=1, max_length=200)
 
 
+RULE_ID_PATTERN = r"^[A-Za-z0-9._:-]{1,120}$"
+
+
+class CaseTriage(TriageUpdate):
+    """Triage d'un dossier entier : toutes les alertes de la règle dont le statut s'y prête."""
+
+    rule_id: str = Field(pattern=RULE_ID_PATTERN)
+
+
+class AlertCase(BaseModel):
+    """Dossier = toutes les alertes d'une même règle (5 fois « Mimikatz » = 1 dossier ×5)."""
+
+    rule_id: str
+    rule_title: str
+    severity: str
+    risk: int
+    mitre: str | None
+    mitre_name: str | None
+    tactic: str | None  # identifiant ATT&CK ; None = technique hors base
+    tactic_fr: str | None
+    count: int
+    by_status: dict[str, int]
+    first_seen: datetime
+    last_seen: datetime
+    latest_id: int
+    latest_message: str | None
+    channels: list[str]
+
+
+class CaseSummary(BaseModel):
+    """État de la file, indépendant des filtres (bandeau d'en-tête)."""
+
+    open_alerts: int
+    open_cases: int
+    open_critical: int
+    tactics_hit: list[str]  # tactiques des dossiers ouverts
+    closed: int
+    true_positive: int
+    false_positive: int
+    mean_triage_minutes: float | None  # délai moyen détection -> dernier triage
+
+
+class CasePage(BaseModel):
+    total: int
+    cases: list[AlertCase]
+    summary: CaseSummary
+
+
 class BulkTriageResult(BaseModel):
     updated: int
     missing: list[int]

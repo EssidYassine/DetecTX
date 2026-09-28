@@ -1,6 +1,7 @@
 """Endpoints des alertes produites par le moteur de détection (lecture + triage)."""
 
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,27 +11,34 @@ from app.deps import get_current_user, require_role
 from app.models.alert import Alert
 from app.models.user import Role, User
 from app.schemas.alerts import (
+    RULE_ID_PATTERN,
     AlertOut,
     AlertPage,
     AlertStats,
     AlertTimeline,
     BulkTriage,
     BulkTriageResult,
+    CasePage,
+    CaseTriage,
     TriageUpdate,
 )
 from app.services import alerts as svc
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
+Severity = Literal["critical", "high", "medium", "low"]
+StatusFilter = Literal["new", "ack", "closed", "open"]  # open = nouvelles + en cours
+
 
 @router.get("", response_model=AlertPage)
 async def list_alerts(
-    severity: str | None = Query(default=None),
-    status: str | None = Query(default=None),
-    mitre: str | None = Query(default=None),
-    q: str | None = Query(default=None),
+    severity: Severity | None = Query(default=None),
+    status: StatusFilter | None = Query(default=None),
+    mitre: str | None = Query(default=None, max_length=40),
+    q: str | None = Query(default=None, max_length=200),
     since: datetime | None = Query(default=None, description="Début de période (ISO 8601, inclus)"),
     until: datetime | None = Query(default=None, description="Fin de période (ISO 8601, exclue)"),
+    rule_id: str | None = Query(default=None, pattern=RULE_ID_PATTERN, description="Alertes d'un dossier (règle)"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
@@ -44,9 +52,38 @@ async def list_alerts(
         q=q,
         since=since,
         until=until,
+        rule_id=rule_id,
         offset=offset,
         limit=limit,
     )
+
+
+@router.get("/cases", response_model=CasePage)
+async def list_cases(
+    severity: Severity | None = Query(default=None),
+    status: StatusFilter | None = Query(default=None),
+    mitre: str | None = Query(default=None, max_length=40),
+    q: str | None = Query(default=None, max_length=200),
+    since: datetime | None = Query(default=None),
+    until: datetime | None = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+    _: User = Depends(get_current_user),
+) -> CasePage:
+    """Alertes regroupées en dossiers (une règle = un dossier) + état de la file."""
+    return await svc.list_cases(session, severity=severity, status=status, mitre=mitre, q=q, since=since, until=until)
+
+
+@router.post("/cases/triage", response_model=BulkTriageResult)
+async def triage_case(
+    payload: CaseTriage,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_role(Role.admin, Role.analyst)),
+) -> BulkTriageResult:
+    """Triage d'un dossier entier (toutes les alertes de la règle dont le statut s'y prête)."""
+    result = await svc.triage_case(session, payload.rule_id, status=payload.status, resolution=payload.resolution, actor=user.email)
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dossier introuvable")
+    return result
 
 
 @router.get("/stats", response_model=AlertStats)
