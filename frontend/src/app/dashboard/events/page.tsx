@@ -65,7 +65,8 @@ function EventsView() {
   const [feed, setFeed] = useState<FeedItem[] | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [relief, setRelief] = useState<ReliefSlice | null>(null);
-  const [opened, setOpened] = useState<string | null>(null);
+  const urlEvent = sp.get("event");
+  const [opened, setOpened] = useState<string | null>(() => (urlEvent && /^[A-Za-z0-9_-]{1,64}$/.test(urlEvent) ? urlEvent : null));
   const [now, setNow] = useState(() => Date.now());
   const [refreshKey, setRefreshKey] = useState(0);
 

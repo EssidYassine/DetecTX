@@ -70,7 +70,7 @@ async def get_event(event_key: str) -> EventDetail | None:
     return EventDetail(
         **base.model_dump(),
         fields=fields,
-        knowledge=event_catalog.describe(base.channel, base.event_id),
+        knowledge=event_catalog.describe(base.channel, base.event_id, base.provider),
         alerts=await _linked_alerts(base.channel, base.record_id, base.event_id, base.timestamp),
     )
 
@@ -193,7 +193,7 @@ async def feed(minutes: int, limit: int) -> list[FeedItem]:
     for e in page.items:
         if e.level == "Verbose":  # journalisation exhaustive (ex. tous les blocs PowerShell) : pas un fait marquant
             continue
-        known = event_catalog.describe(e.channel, e.event_id)
+        known = event_catalog.describe(e.channel, e.event_id, e.provider)
         narrated = (event_catalog.family(e.channel), e.event_id) in event_narrator.TEMPLATES
         level = known["level"] if known else "info"
         if not narrated and level == "info":

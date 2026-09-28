@@ -61,6 +61,14 @@ def test_catalog_families_and_lookup():
     assert event_catalog.describe("Security", None) is None
 
 
+def test_catalog_checks_provider_for_shared_ids():
+    # ID 1000 du journal Application : plantage pour « Application Error », simple message pour VMware.
+    assert event_catalog.lookup("Application", 1000, "Application Error").title == "Plantage d'application"
+    assert event_catalog.lookup("Application", 1000, "vmauthd") is None
+    assert event_catalog.lookup("Application", 1000) is not None  # fournisseur inconnu : on garde la fiche
+    assert event_catalog.lookup("System", 7045, "anything") is not None  # IDs non partagés : fournisseur ignoré
+
+
 def test_hunts_are_well_formed():
     ids = [h.id for h in hunts.HUNTS]
     assert len(ids) == len(set(ids))

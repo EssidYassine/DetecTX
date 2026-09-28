@@ -172,10 +172,34 @@ CATALOG: dict[tuple[str, int], EventKnowledge] = {
 }
 
 
-def describe(channel: str | None, event_id: int | None) -> dict | None:
+# Identifiants partagés par plusieurs fournisseurs : la fiche ne vaut que pour le fournisseur
+# attendu. Ex. : l'ID 1000 du journal Application est un plantage pour « Application Error »,
+# mais VMware (vmauthd) y écrit ses messages d'information sous le même ID.
+PROVIDERS: dict[tuple[str, int], str] = {
+    ("Application", 1000): "Application Error",
+    ("Application", 1001): "Windows Error Reporting",
+    ("Application", 1002): "Application Hang",
+    ("Application", 11707): "MsiInstaller",
+    ("Application", 11724): "MsiInstaller",
+    ("Application", 16384): "Microsoft-Windows-Security-SPP",
+}
+
+
+def lookup(channel: str | None, event_id: int | None, provider: str | None = None) -> K | None:
+    """Fiche du catalogue ; None si l'ID est inconnu ou émis par un autre fournisseur que prévu
+    (fournisseur absent = on garde la fiche, faute de mieux)."""
     if event_id is None:
         return None
-    known = CATALOG.get((family(channel), event_id))
+    key = (family(channel), event_id)
+    known = CATALOG.get(key)
+    expected = PROVIDERS.get(key)
+    if known and expected and provider and provider.lower() != expected.lower():
+        return None
+    return known
+
+
+def describe(channel: str | None, event_id: int | None, provider: str | None = None) -> dict | None:
+    known = lookup(channel, event_id, provider)
     return asdict(known) if known else None
 
 

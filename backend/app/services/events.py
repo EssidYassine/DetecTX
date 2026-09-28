@@ -13,7 +13,7 @@ from sqlalchemy import func, or_, select
 from app.clients import get_opensearch
 from app.config import get_settings
 from app.db import SessionLocal
-from app.detection.event_catalog import CATALOG, family
+from app.detection.event_catalog import lookup
 from app.detection.event_narrator import summarize
 from app.models.event import Event
 from app.schemas.events import EventOut, EventPage, EventStats, IngestEvent
@@ -330,15 +330,15 @@ def _sql_conditions(channel, event_id, keywords, minutes, *, phrase: bool):
     return conds
 
 
-def _title(channel: str | None, event_id: int | None) -> str | None:
-    known = CATALOG.get((family(channel), event_id)) if event_id is not None else None
+def _title(channel: str | None, event_id: int | None, provider: str | None = None) -> str | None:
+    known = lookup(channel, event_id, provider)
     return known.title if known else None
 
 
 def _row_to_out(r: Event) -> EventOut:
     return EventOut(
         id=str(r.id),
-        title=_title(r.channel, r.event_id),
+        title=_title(r.channel, r.event_id, r.provider),
         summary=summarize(r.channel, r.event_id, r.fields, r.message),
         timestamp=r.ts,
         channel=r.channel,
@@ -355,7 +355,7 @@ def _src_to_out(hit: dict) -> EventOut:
     s = hit["_source"]
     return EventOut(
         id=str(hit["_id"]),
-        title=_title(s.get("channel"), s.get("event_id")),
+        title=_title(s.get("channel"), s.get("event_id"), s.get("provider")),
         summary=summarize(s.get("channel"), s.get("event_id"), s.get("raw"), s.get("message")),
         timestamp=s["@timestamp"],
         channel=s.get("channel", "unknown"),

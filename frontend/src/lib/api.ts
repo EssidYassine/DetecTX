@@ -805,6 +805,50 @@ export interface MitreDetail {
   count: number;
 }
 
+// ─────────────────────────────── posture du poste (5 piliers, constats sourcés)
+export type PostureTone = "ok" | "warn" | "critical" | "unknown";
+export type PillarKey = "threats" | "exposure" | "defense" | "visibility" | "health";
+export type FindingLevel = "critical" | "high" | "medium" | "low" | "ok";
+
+export interface Finding {
+  id: string;
+  pillar: PillarKey;
+  level: FindingLevel; // ok = ce qui va bien (jamais en priorité)
+  title: string;
+  detail: string | null;
+  source: string; // d'où vient le constat
+  href: string | null; // page où agir
+  action: string | null;
+  at: string | null;
+}
+
+export interface Pillar {
+  key: PillarKey;
+  label: string;
+  weight: number;
+  score: number | null; // null = source indisponible
+  tone: PostureTone;
+  headline: string;
+  href: string;
+  findings: Finding[];
+}
+
+export interface Posture {
+  score: number | null;
+  tone: PostureTone;
+  verdict: string;
+  summary: string;
+  pillars: Pillar[];
+  priorities: Finding[];
+  generated_at: string;
+}
+
+export async function fetchPosture(): Promise<Posture> {
+  const res = await fetch(`${API_URL}/stats/posture`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as Posture;
+}
+
 export interface Overview {
   events_total: number;
   events_24h: number;

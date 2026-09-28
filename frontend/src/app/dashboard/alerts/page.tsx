@@ -56,7 +56,8 @@ function AlertsView() {
     q: "",
   }));
   const [mode, setMode] = useState<ViewMode>("cases");
-  const [selected, setSelected] = useState<string | null>(null);
+  const urlCase = sp.get("case");
+  const [selected, setSelected] = useState<string | null>(() => (urlCase && /^[A-Za-z0-9._:-]{1,120}$/.test(urlCase) ? urlCase : null));
   const [refreshKey, setRefreshKey] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [stats, setStats] = useState<AlertStats | null>(null);

@@ -1,90 +1,65 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchMetrics, fetchOverview, searchAlerts, type Alert, type Metrics, type Overview } from "@/lib/api";
-import { ReportButton } from "@/components/report-button";
-import { AlertDrawer } from "@/components/alert-drawer";
+import { useCallback, useState } from "react";
+import { fetchAlertCases, fetchFeed, fetchMetrics, fetchOverview, fetchPosture, type AlertCase, type FeedItem, type Metrics, type Overview, type Posture } from "@/lib/api";
+import { sceneTone } from "@/lib/posture";
+import { usePolling } from "@/lib/use-polling";
+import { HeroBand } from "@/components/overview/hero-band";
 import { HostPanel } from "@/components/overview/host-panel";
-import { ReactorPanel } from "@/components/overview/reactor-panel";
+import { ShieldPanel } from "@/components/overview/shield-panel";
+import { PrioritiesPanel } from "@/components/overview/priorities-panel";
 import { DialPanel } from "@/components/overview/dial-panel";
-import { SkylinePanel } from "@/components/overview/skyline-panel";
-import { DetectionsFeed } from "@/components/overview/detections-feed";
-import { postureScore, postureTone } from "@/lib/posture";
-import { withWorstSeverity } from "@/lib/mitre";
+import { LiveFeed } from "@/components/overview/live-feed";
 
 const EMPTY_SERIES: number[] = Array(24).fill(0);
+const POSTURE_MS = 15_000;
+const METRICS_MS = 3_000;
+const FEED_MS = 15_000;
 
 /**
- * Centre de supervision : tout tient dans un écran (pas de défilement sur desktop).
- * Chaque widget est une scène 3D générée par Blender (assets/3d/) et animée par les
- * données réelles ; les chiffres et titres restent en 2D (HUD) pour la lisibilité.
+ * Centre de supervision : répondre en 5 secondes à « suis-je protégé ? », « que dois-je
+ * faire ? » et « que se passe-t-il ? ». Tout tient dans l'écran (pas de défilement sur desktop).
+ * La posture est calculée par le serveur (5 piliers, constats sourcés) : GET /stats/posture.
  */
 export default function OverviewPage() {
+  const [posture, setPosture] = useState<Posture | null>(null);
   const [ov, setOv] = useState<Overview | null>(null);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [alertsTotal, setAlertsTotal] = useState(0);
+  const [cases, setCases] = useState<AlertCase[] | null>(null);
+  const [feed, setFeed] = useState<FeedItem[] | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [selected, setSelected] = useState<Alert | null>(null);
-  const [highlightId, setHighlightId] = useState<number | null>(null);
 
-  const loadOverview = useCallback(async () => {
-    const [o, a] = await Promise.all([fetchOverview().catch(() => null), searchAlerts({ limit: 200 }).catch(() => null)]);
+  const loadPosture = useCallback(async () => {
+    const [p, o] = await Promise.all([fetchPosture().catch(() => null), fetchOverview().catch(() => null)]);
+    if (p) setPosture(p);
     if (o) setOv(o);
-    if (a) {
-      setAlerts([...a.items].sort((x, y) => y.created_at.localeCompare(x.created_at)));
-      setAlertsTotal(a.total);
-    }
     setNow(Date.now());
   }, []);
   const loadMetrics = useCallback(async () => {
-    setMetrics(await fetchMetrics().catch(() => null));
+    const m = await fetchMetrics().catch(() => null);
+    if (m) setMetrics(m);
+  }, []);
+  const loadFeed = useCallback(async () => {
+    const [c, f] = await Promise.all([fetchAlertCases({}).catch(() => null), fetchFeed(60 * 24, 30).catch(() => null)]);
+    if (c) setCases([...c.cases].sort((a, b) => b.last_seen.localeCompare(a.last_seen)).slice(0, 12));
+    if (f) setFeed(f);
   }, []);
 
-  useEffect(() => {
-    void loadOverview();
-    void loadMetrics();
-    const a = setInterval(() => void loadOverview(), 15000);
-    const b = setInterval(() => void loadMetrics(), 3000);
-    return () => {
-      clearInterval(a);
-      clearInterval(b);
-    };
-  }, [loadOverview, loadMetrics]);
+  usePolling(loadPosture, POSTURE_MS);
+  usePolling(loadMetrics, METRICS_MS);
+  usePolling(loadFeed, FEED_MS);
 
-  const score = ov ? postureScore(ov.by_severity) : 100;
-  const bySeverity = ov?.by_severity ?? {};
-  const techniques = useMemo(() => withWorstSeverity(ov?.mitre_details ?? [], alerts), [ov?.mitre_details, alerts]);
+  const openCritical = posture?.pillars.find((p) => p.key === "threats")?.findings.filter((f) => f.level === "critical").length ?? 0;
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-lg font-semibold">Centre de supervision</h1>
-          <p className="truncate text-sm text-muted">Posture, menaces et santé du poste · temps réel · survolez et cliquez les objets 3D</p>
-        </div>
-        <ReportButton />
-      </div>
+      <HeroBand posture={posture} hostname={metrics?.hostname ?? null} now={now} />
 
-      {/* Desktop : la grille remplit exactement l'écran. 13.25rem = barre du haut (68px)
-          + marges du layout + en-tête de page, mesurés dans le navigateur. En dessous de
-          ~690px de haut, la hauteur minimale reprend la main (défilement plutôt qu'écrasement). */}
-      <div className="grid gap-4 lg:h-[calc(100dvh-13.25rem)] lg:min-h-[480px] lg:grid-cols-12 lg:grid-rows-[1.2fr_1fr]">
-        <HostPanel
-          metrics={metrics}
-          posture={postureTone(score)}
-          criticals={bySeverity.critical ?? 0}
-          className="h-[26rem] lg:col-span-8 lg:h-auto"
-        />
-        <ReactorPanel
-          alerts={alerts}
-          total={alertsTotal}
-          bySeverity={bySeverity}
-          score={score}
-          highlightId={highlightId}
-          onSelect={setSelected}
-          className="h-[26rem] lg:col-span-4 lg:h-auto"
-        />
+      {/* Desktop : la grille remplit exactement l'écran sous le bandeau ; seules les listes défilent. */}
+      <div className="grid gap-4 lg:h-[calc(100dvh-17rem)] lg:min-h-[460px] lg:grid-cols-12 lg:grid-rows-[minmax(0,1.2fr)_minmax(0,1fr)]">
+        <HostPanel metrics={metrics} posture={sceneTone(posture?.tone)} criticals={openCritical} className="h-[26rem] lg:col-span-7 lg:h-auto" />
+        <ShieldPanel posture={posture} className="h-[26rem] lg:col-span-5 lg:h-auto" />
+        <PrioritiesPanel posture={posture} now={now} className="h-80 lg:col-span-4 lg:h-auto" />
         <DialPanel
           events={ov?.events_series ?? EMPTY_SERIES}
           alerts={ov?.alerts_series ?? EMPTY_SERIES}
@@ -92,20 +67,10 @@ export default function OverviewPage() {
           events24h={ov?.events_24h ?? 0}
           eventsTotal={ov?.events_total ?? 0}
           byChannel={ov?.by_channel ?? {}}
-          className="h-80 lg:col-span-3 lg:h-auto"
-        />
-        <SkylinePanel techniques={techniques} className="h-80 lg:col-span-5 lg:h-auto" />
-        <DetectionsFeed
-          alerts={alerts}
-          now={now}
-          highlightId={highlightId}
-          onHighlight={setHighlightId}
-          onSelect={setSelected}
           className="h-80 lg:col-span-4 lg:h-auto"
         />
+        <LiveFeed cases={cases} feed={feed} now={now} className="h-80 lg:col-span-4 lg:h-auto" />
       </div>
-
-      <AlertDrawer alert={selected} onClose={() => setSelected(null)} />
     </>
   );
 }
