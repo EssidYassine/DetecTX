@@ -888,6 +888,56 @@ export async function fetchPosture(): Promise<Posture> {
   return (await res.json()) as Posture;
 }
 
+// ─────────────────────────────── couverture MITRE ATT&CK (réelle vs théorique)
+export interface TechniqueCoverage {
+  id: string;
+  name: string | null;
+  tactics: string[];
+  district: string; // quartier de la ruche (1re tactique dans l'ordre de la kill chain)
+  desc: string | null;
+  url: string;
+  by_source: Record<string, number>; // règles par source de données
+  theoretical: number;
+  effective: number;
+  inert: number;
+  alerts: number;
+  alerts_open: number;
+}
+
+export interface MitreCoverage {
+  attack_version: string | null;
+  tactics: { id: string; name: string }[];
+  sources: { id: string; label: string; available: boolean }[];
+  techniques: TechniqueCoverage[];
+  totals: {
+    techniques: number;
+    techniques_theoretical: number;
+    techniques_effective: number;
+    techniques_observed: number;
+    rules_theoretical: number;
+    rules_effective: number;
+    rules_inert: number;
+  };
+  plan: { source: string; label: string; how: string | null; rules: number; techniques: number }[];
+  observed_uncovered: string[];
+}
+
+export interface TechniqueDetail extends TechniqueCoverage {
+  rules: { id: string; title: string; severity: string; origin: string; source: string; active: boolean; reason: string | null }[];
+}
+
+export async function fetchMitreCoverage(): Promise<MitreCoverage> {
+  const res = await fetch(`${API_URL}/mitre/coverage`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as MitreCoverage;
+}
+
+export async function fetchTechnique(id: string): Promise<TechniqueDetail> {
+  const res = await fetch(`${API_URL}/mitre/techniques/${encodeURIComponent(id)}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as TechniqueDetail;
+}
+
 export interface Overview {
   events_total: number;
   events_24h: number;

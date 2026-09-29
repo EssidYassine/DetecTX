@@ -28,6 +28,7 @@ from app.routers import (
     events,
     launcher,
     metrics,
+    mitre,
     notifications,
     reports,
     rules,
@@ -35,7 +36,7 @@ from app.routers import (
     system_control,
     threatintel,
 )
-from app.services import winlog_collector
+from app.services import attack, winlog_collector
 from app.services.events import ensure_events_index, repair_missing_messages
 
 logger = logging.getLogger("detectx")
@@ -94,7 +95,11 @@ async def lifespan(app: FastAPI):
 
     logger.info("DeTecTX backend %s démarré (provider LLM: %s)", __version__, settings.llm_provider)
     collector = asyncio.create_task(winlog_collector.run_forever()) if winlog_collector.is_enabled() else None
+    # Index des règles par technique ATT&CK (~4 s, surtout Sigma) : préchargé en tâche de fond
+    # pour que la première ouverture de la page MITRE (et la première détection) soit immédiate.
+    warmup = asyncio.create_task(asyncio.to_thread(attack.static_rules))
     yield
+    warmup.cancel()
     if collector is not None:
         collector.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -134,6 +139,7 @@ app.include_router(notifications.router)
 app.include_router(stats.router)
 app.include_router(rules.router)
 app.include_router(metrics.router)
+app.include_router(mitre.router)
 app.include_router(system_control.router)
 app.include_router(launcher.router)
 

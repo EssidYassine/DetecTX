@@ -80,6 +80,15 @@ class SigmaRule:
     condition: str
     channel_hint: str | None = field(default=None)
     event_ids: set[int] | None = field(default=None)
+    techniques: tuple[str, ...] = ()  # toutes les techniques ATT&CK des tags (pas seulement la 1re)
+
+    @property
+    def source(self) -> str:
+        """Source de données requise : Sysmon | PowerShell | Security | System | Application |
+        any (aucun journal précis) | inert (télémétrie que DeTecTX ne collecte pas)."""
+        if self.channel_hint == _INERT:
+            return "inert"
+        return self.channel_hint or "any"
 
     def applies_to(self, event: dict) -> bool:
         ch = event.get("channel") or ""
@@ -88,6 +97,15 @@ class SigmaRule:
         if self.event_ids is not None and event.get("event_id") not in self.event_ids:
             return False
         return True
+
+
+def _extract_techniques(tags: list) -> tuple[str, ...]:
+    found: list[str] = []
+    for t in tags or []:
+        m = re.fullmatch(r"attack\.(t\d{4}(?:\.\d{3})?)", str(t).strip(), re.IGNORECASE)
+        if m and m.group(1).upper() not in found:
+            found.append(m.group(1).upper())
+    return tuple(found)
 
 
 def _extract_mitre(tags: list) -> str | None:
@@ -136,6 +154,7 @@ def load_sigma_rules() -> list[SigmaRule]:
                 title=doc.get("title", path.stem),
                 severity=_LEVEL_TO_SEVERITY.get(doc.get("level", "medium"), "medium"),
                 mitre=_extract_mitre(doc.get("tags", [])),
+                techniques=_extract_techniques(doc.get("tags", [])),
                 category=category,
                 service=service,
                 detection=det,
