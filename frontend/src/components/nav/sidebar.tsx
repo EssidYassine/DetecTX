@@ -43,11 +43,8 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
     title: "Enrichir",
     items: [
       { label: "Threat Intel", href: "/dashboard/threat-intel", icon: "intel" },
-      { label: "Assistant IA", href: "/dashboard/ai-assistant", icon: "ai" },
-      { label: "Rapports", href: "/dashboard/reports", icon: "reports" },
     ],
   },
-  { title: "Administrer", items: [{ label: "Administration", href: "/dashboard/admin", icon: "admin" }] },
 ];
 
 const COLLECTION: Record<NavStats["collection"], { tone: string; label: string }> = {

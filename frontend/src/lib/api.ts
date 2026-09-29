@@ -1090,21 +1090,6 @@ export const refreshFeeds = () => intelSend<{ feeds: IntelFeed[] }>("/feeds/refr
 export const toggleFeed = (id: string, enabled: boolean) => intelSend<{ feeds: IntelFeed[] }>(`/feeds/${encodeURIComponent(id)}?enabled=${enabled}`, "PATCH");
 export const refreshVulns = () => intelSend<{ started: boolean; detail: string }>("/vulns/refresh", "POST");
 
-export async function notifyStatus(): Promise<{ discord: boolean }> {
-  const res = await fetch(`${API_URL}/notifications/status`, { headers: authHeaders() });
-  if (!res.ok) throw new Error(await readError(res));
-  return (await res.json()) as { discord: boolean };
-}
-
-export async function notifyTest(): Promise<{ sent: boolean; detail: string }> {
-  const res = await fetch(`${API_URL}/notifications/test`, {
-    method: "POST",
-    headers: authHeaders(),
-  });
-  if (!res.ok) throw new Error(await readError(res));
-  return (await res.json()) as { sent: boolean; detail: string };
-}
-
 export async function downloadReport(): Promise<void> {
   const res = await fetch(`${API_URL}/reports/summary.pdf`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await readError(res));
