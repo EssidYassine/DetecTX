@@ -972,15 +972,123 @@ export interface IntelResult {
   cached: boolean;
 }
 
-export async function threatIntelLookup(indicator: string, type?: string): Promise<IntelResult> {
-  const qs = new URLSearchParams({ indicator });
-  if (type) qs.set("type", type);
-  const res = await fetch(`${API_URL}/threatintel/lookup?${qs.toString()}`, {
-    headers: authHeaders(),
-  });
+/** Analyse en ligne d'un indicateur DU POSTE (le serveur refuse tout IOC hors inventaire et toute IP non publique). */
+export async function threatIntelLookup(indicator: string): Promise<IntelResult> {
+  const res = await fetch(`${API_URL}/threatintel/indicator/lookup?value=${encodeURIComponent(indicator)}`, { method: "POST", headers: authHeaders() });
   if (!res.ok) throw new Error(await readError(res));
   return (await res.json()) as IntelResult;
 }
+
+// ─────────────────────────────── Threat Intel : indicateurs du poste, listes, vulnérabilités
+export interface IntelFeed {
+  id: string;
+  name: string;
+  kind: string;
+  verdict: "malicious" | "suspicious" | "reference";
+  license: string;
+  homepage: string;
+  description: string;
+  enabled: boolean;
+  updated: string | null;
+  count: number | null;
+  error: string | null;
+}
+
+export interface IntelProviderStatus {
+  id: string;
+  name: string;
+  configured: boolean;
+  env: string;
+}
+
+export interface IntelSighting {
+  kind: "connexion" | "programme" | "journal" | "alerte";
+  label: string;
+  process: string | null;
+  pid: number | null;
+  at: string | null;
+  ref: string | null;
+}
+
+export interface IntelIndicator {
+  value: string;
+  type: "ip" | "domain" | "hash";
+  verdict: "malicious" | "suspicious" | "unknown";
+  feeds: string[];
+  online: string | null;
+  layer: number | null; // disque du tamis (0 listes, 1 AbuseIPDB, 2 VirusTotal, 3 MISP/OTX) ; null = vasque
+  sightings: number;
+  seen: IntelSighting;
+}
+
+export interface IntelOverview {
+  generated_at: string;
+  feeds: IntelFeed[];
+  providers: IntelProviderStatus[];
+  indicators: IntelIndicator[];
+  totals: { indicators: number; ips: number; domains: number; hashes: number; matches: number; feeds_active: number; providers_configured: number };
+}
+
+export interface IntelIndicatorDetail extends IntelIndicator {
+  all_sightings: IntelSighting[];
+  feed_details: IntelFeed[];
+  lookup: IntelResult | null;
+}
+
+export interface VulnFinding {
+  software: { name: string; version: string; publisher: string };
+  kev: {
+    cveID: string;
+    vendorProject: string;
+    product: string;
+    vulnerabilityName: string | null;
+    dateAdded: string | null;
+    shortDescription: string | null;
+    requiredAction: string | null;
+    dueDate: string | null;
+    knownRansomwareCampaignUse: string | null;
+  };
+  status: "vulnerable" | "fixed" | "unknown";
+  fixed_in: string | null;
+}
+
+export interface WindowsUpdateItem {
+  title: string;
+  kbs: string[];
+  cves: string[];
+  severity: string | null;
+  categories: string[];
+  reboot: boolean;
+}
+
+export interface VulnReport {
+  scanned_at: string | null;
+  running: boolean;
+  os: { product?: string; display_version?: string; build?: string | null };
+  windows_update: { available: boolean; error: string | null; updates: WindowsUpdateItem[] };
+  software_count: number;
+  kev_entries: number;
+  findings: VulnFinding[];
+}
+
+async function intelGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_URL}/threatintel${path}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as T;
+}
+
+async function intelSend<T>(path: string, method: "POST" | "PATCH"): Promise<T> {
+  const res = await fetch(`${API_URL}/threatintel${path}`, { method, headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as T;
+}
+
+export const fetchIntelOverview = () => intelGet<IntelOverview>("/overview");
+export const fetchIntelIndicator = (value: string) => intelGet<IntelIndicatorDetail>(`/indicator?value=${encodeURIComponent(value)}`);
+export const fetchVulns = () => intelGet<VulnReport>("/vulns");
+export const refreshFeeds = () => intelSend<{ feeds: IntelFeed[] }>("/feeds/refresh", "POST");
+export const toggleFeed = (id: string, enabled: boolean) => intelSend<{ feeds: IntelFeed[] }>(`/feeds/${encodeURIComponent(id)}?enabled=${enabled}`, "PATCH");
+export const refreshVulns = () => intelSend<{ started: boolean; detail: string }>("/vulns/refresh", "POST");
 
 export async function notifyStatus(): Promise<{ discord: boolean }> {
   const res = await fetch(`${API_URL}/notifications/status`, { headers: authHeaders() });

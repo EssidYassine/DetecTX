@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # Collecteur intégré : le backend lit lui-même les journaux Windows de l'hôte (sans agent).
     local_collector: bool = Field(default=True, validation_alias="LOCAL_COLLECTOR")
     collector_state_path: str = Field(default="data/collector-state.json", validation_alias="COLLECTOR_STATE_PATH")
+    # Threat Intel : listes publiques téléchargées (au démarrage puis toutes les 12 h) et comparées
+    # EN LOCAL à l'inventaire du poste ; inventaire des vulnérabilités (Windows Update, KEV, NVD).
+    intel_feeds: bool = Field(default=True, validation_alias="INTEL_FEEDS")
+    intel_dir: str = Field(default="data/intel", validation_alias="INTEL_DIR")
 
     # PostgreSQL
     postgres_user: str = "detectx"
@@ -60,6 +64,7 @@ class Settings(BaseSettings):
     abuseipdb_api_key: str = ""
     misp_url: str = ""
     misp_key: str = ""
+    otx_api_key: str = Field(default="", validation_alias="OTX_API_KEY")
 
     # Notifications
     discord_webhook_url: str = ""

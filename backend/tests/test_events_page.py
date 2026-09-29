@@ -212,8 +212,10 @@ def test_histogram_by_theme_and_alert_beacons(db):
     asyncio.run(add_alert())
     h = asyncio.run(event_insights.histogram(48))
     assert [lane.key for lane in h.lanes] == ["sessions", "defense", "execution", "network", "system", "apps"]
-    assert h.counts["system"][-1] == 2 and sum(h.counts["sessions"]) == 1 and h.counts["network"][-1] == 1
-    assert h.alerts[0].lane == "sessions" and h.alerts[0].severity == "high" and h.alerts[0].bin == 47 - 3
+    # Tranches horaires alignées sur l'heure pleine : « il y a 5 et 10 min » peut chevaucher deux
+    # tranches (début d'heure) ; on vérifie donc les deux dernières, sans dépendre de l'horloge.
+    assert sum(h.counts["system"][-2:]) == 2 and sum(h.counts["sessions"]) == 1 and sum(h.counts["network"][-2:]) == 1
+    assert h.alerts[0].lane == "sessions" and h.alerts[0].severity == "high" and h.alerts[0].bin in (47 - 4, 47 - 3)
 
 
 def test_ingest_is_idempotent(db):

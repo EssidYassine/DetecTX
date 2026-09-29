@@ -37,6 +37,7 @@ from app.routers import (
     threatintel,
 )
 from app.services import attack, winlog_collector
+from app.threatintel import feeds, vulns
 from app.services.events import ensure_events_index, repair_missing_messages
 
 logger = logging.getLogger("detectx")
@@ -98,8 +99,12 @@ async def lifespan(app: FastAPI):
     # Index des règles par technique ATT&CK (~4 s, surtout Sigma) : préchargé en tâche de fond
     # pour que la première ouverture de la page MITRE (et la première détection) soit immédiate.
     warmup = asyncio.create_task(asyncio.to_thread(attack.static_rules))
+    # Threat Intel : listes publiques (au démarrage puis toutes les 12 h) et vulnérabilités du poste.
+    intel = [asyncio.create_task(feeds.run_forever()), asyncio.create_task(vulns.run_forever())] if settings.intel_feeds else []
     yield
     warmup.cancel()
+    for task in intel:
+        task.cancel()
     if collector is not None:
         collector.cancel()
         with contextlib.suppress(asyncio.CancelledError):

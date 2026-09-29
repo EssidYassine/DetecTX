@@ -146,7 +146,7 @@ export function ConnectionsPanel({ snapshot, nodes, ports, selected, highlight, 
   async function checkReputation(ip: string) {
     setIntel((m) => ({ ...m, [ip]: "loading" }));
     try {
-      const result = await threatIntelLookup(ip, "ip");
+      const result = await threatIntelLookup(ip);
       setIntel((m) => ({ ...m, [ip]: result }));
     } catch (e) {
       setIntel((m) => ({ ...m, [ip]: { error: e instanceof Error ? e.message : "Échec de l'analyse" } }));
