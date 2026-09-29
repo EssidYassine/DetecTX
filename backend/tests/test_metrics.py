@@ -15,8 +15,8 @@ from fastapi.testclient import TestClient
 from app.deps import get_current_user
 from app.main import app
 from app.models.user import Role, User
+from app.services import authenticode, winproc
 from app.services import metrics as svc
-from app.services import winproc
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="API fenêtres Windows")
 
@@ -62,6 +62,9 @@ def test_top_processes_excludes_idle_and_has_details():
 @pytest.mark.skipif(not winproc.SUPPORTED, reason="instantané natif Windows x64")
 def test_native_snapshot_matches_psutil():
     # Verrouille les offsets des structures NT : parent, date de création, threads, nom.
+    # Les signatures des exécutables se vérifient dans un thread d'arrière-plan : on attend
+    # qu'il ait fini, sinon le nombre de threads change entre les deux mesures.
+    assert authenticode.wait_idle()
     snap = {r.pid: r for r in winproc.snapshot()}
     me = psutil.Process()
     raw = snap[me.pid]

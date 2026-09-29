@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # EN LOCAL à l'inventaire du poste ; inventaire des vulnérabilités (Windows Update, KEV, NVD).
     intel_feeds: bool = Field(default=True, validation_alias="INTEL_FEEDS")
     intel_dir: str = Field(default="data/intel", validation_alias="INTEL_DIR")
+    # Surveillance de la persistance (clés Run, tâches, services…) toutes les 5 min : une entrée
+    # nouvelle ou modifiée, non signée Microsoft, lève une alerte.
+    persistence_watch: bool = Field(default=True, validation_alias="PERSISTENCE_WATCH")
 
     # PostgreSQL
     postgres_user: str = "detectx"

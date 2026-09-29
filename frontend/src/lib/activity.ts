@@ -4,10 +4,10 @@
 // vit moins longtemps qu'un intervalle de rafraîchissement n'y apparaît pas : la trace
 // exhaustive reste celle de Sysmon (événement 1) côté moteur de détection.
 
-import type { ExposureSnapshot, NetSnapshot, ProcInfo } from "./api";
+import type { ExposureSnapshot, NetSnapshot, PersistenceSnapshot, ProcInfo } from "./api";
 import { portKey as exposureKey } from "./netmap";
 
-export type ActivityKind = "proc_start" | "proc_exit" | "port_open" | "port_close" | "remote_new";
+export type ActivityKind = "proc_start" | "proc_exit" | "port_open" | "port_close" | "remote_new" | "persist_new";
 export type ActivityTone = "accent" | "warn" | "muted";
 
 export interface ActivityEvent {
@@ -122,6 +122,22 @@ export function diffExposure(prev: ExposureSnapshot, next: ExposureSnapshot, at:
     });
   });
   return events;
+}
+
+/** Nouvelle persistance apparue entre deux inventaires (clé Run, tâche, service…). */
+export function diffPersistence(prev: PersistenceSnapshot, next: PersistenceSnapshot, at: number): ActivityEvent[] {
+  const before = new Set(prev.entries.map((e) => e.id));
+  return next.entries
+    .filter((e) => !before.has(e.id))
+    .map((e) => ({
+      id: `persist:${e.id}:${at}`,
+      at,
+      kind: "persist_new" as const,
+      pid: null,
+      process: e.name,
+      detail: `se relance au démarrage (${e.mechanism})`,
+      tone: e.signature?.verdict === "microsoft" ? ("muted" as const) : ("warn" as const),
+    }));
 }
 
 /** Ajoute des événements en tête (plus récents d'abord) en bornant la taille du journal. */

@@ -9,62 +9,25 @@ Garanties :
 - seules des règles « Bloquer » du groupe DeTecTX sont créées ; aucune règle existante n'est
   modifiée ou supprimée (l'assistant refuse de retirer une règle hors du groupe) ;
 - une seule action à la fois ; arguments validés ici ET dans l'assistant ;
-- l'interpréteur est lancé avec -E (variables PYTHON* ignorées) pour ne pas hériter d'un
-  PYTHONPATH piégé dans le processus élevé.
+- élévation commune avec les remèdes (`elevation.run_elevated`).
 """
 
-import subprocess
 import sys
 import threading
 from pathlib import Path
 
-from app.services import firewall, fw_helper
+from app.services import elevation, firewall, fw_helper
+from app.services.elevation import ActionError
 
 HELPER = Path(fw_helper.__file__).resolve()
-TIMEOUT_S = 120  # le temps de lire et d'accepter l'invite UAC
-_ERROR_CANCELLED = 1223  # l'utilisateur a refusé l'invite UAC
 _lock = threading.Lock()
 
-
-class ActionError(Exception):
-    def __init__(self, status: int, detail: str):
-        self.status = status
-        self.detail = detail
+__all__ = ["ActionError", "block", "elevated", "unblock"]
 
 
 def _run_elevated(args: list[str]) -> int:
-    """Lance l'assistant avec élévation et renvoie son code de sortie."""
-    if sys.platform != "win32":
-        raise ActionError(501, "Pilotage du pare-feu disponible uniquement sous Windows.")
-    command = [sys.executable, "-E", str(HELPER), *args]
-    if fw_helper.is_admin():  # backend déjà élevé : pas d'invite
-        return subprocess.run(command, timeout=TIMEOUT_S, capture_output=True, check=False).returncode
-
-    import pywintypes
-    import win32con
-    import win32event
-    import win32process
-    from win32com.shell import shell, shellcon
-
-    try:
-        info = shell.ShellExecuteEx(
-            fMask=shellcon.SEE_MASK_NOCLOSEPROCESS | shellcon.SEE_MASK_NO_CONSOLE,
-            lpVerb="runas",
-            lpFile=command[0],
-            lpParameters=subprocess.list2cmdline(command[1:]),
-            nShow=win32con.SW_HIDE,
-        )
-    except pywintypes.error as e:
-        if e.winerror == _ERROR_CANCELLED:
-            raise ActionError(403, "Autorisation refusée dans l'invite Windows : aucune règle modifiée.") from e
-        raise ActionError(500, f"Lancement de l'assistant impossible ({e.winerror}).") from e
-    handle = info["hProcess"]
-    try:
-        if win32event.WaitForSingleObject(handle, TIMEOUT_S * 1000) != win32event.WAIT_OBJECT_0:
-            raise ActionError(504, "Pas de réponse à l'invite Windows dans le délai : action abandonnée.")
-        return win32process.GetExitCodeProcess(handle)
-    finally:
-        handle.Close()
+    """Lance l'assistant pare-feu avec élévation et renvoie son code de sortie."""
+    return elevation.run_elevated(HELPER, args, nothing_changed="aucune règle modifiée.")
 
 
 def _check_exit(code: int) -> None:

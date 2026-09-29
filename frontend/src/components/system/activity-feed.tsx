@@ -3,12 +3,13 @@
 import { useMemo, useState } from "react";
 import { coalesce, type ActivityEvent, type ActivityGroup, type ActivityKind } from "@/lib/activity";
 
-type Filter = "all" | "process" | "network";
+type Filter = "all" | "process" | "network" | "startup";
 
 const FILTERS: { key: Filter; label: string; kinds: ActivityKind[] | null }[] = [
   { key: "all", label: "Tout", kinds: null },
   { key: "process", label: "Processus", kinds: ["proc_start", "proc_exit"] },
   { key: "network", label: "Réseau", kinds: ["port_open", "port_close", "remote_new"] },
+  { key: "startup", label: "Démarrage", kinds: ["persist_new"] },
 ];
 
 const ICON: Record<ActivityKind, string> = {
@@ -17,6 +18,7 @@ const ICON: Record<ActivityKind, string> = {
   port_open: "◉",
   port_close: "○",
   remote_new: "↗",
+  persist_new: "↻",
 };
 
 /** Phrase principale d'un groupe d'événements (au singulier ou au pluriel). */
@@ -33,6 +35,8 @@ function headline(g: ActivityGroup): string {
       return many ? `${g.count} ports fermés` : "a fermé un port";
     case "remote_new":
       return many ? `${g.count} nouvelles destinations` : "nouvelle destination";
+    case "persist_new":
+      return many ? `${g.count} nouvelles persistances` : "nouvelle persistance";
   }
 }
 

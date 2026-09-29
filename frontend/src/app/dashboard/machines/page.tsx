@@ -7,17 +7,28 @@ import {
   closeProcess,
   fetchConnections,
   fetchExposure,
+  fetchHardening,
+  fetchMe,
   fetchMetrics,
+  fetchPersistence,
   fetchProcesses,
+  fetchRemedies,
   killProcess,
   type Metrics,
   type ExposureSnapshot,
   type FirewallProfile,
+  type HardeningSnapshot,
   type NetSnapshot,
+  type PersistenceEntry,
+  type PersistenceSnapshot,
   type ProcInfo,
+  type RemedyRecord,
+  type User,
   unblockRule,
 } from "@/lib/api";
-import { diffExposure, diffNetwork, diffProcesses, pushEvents, type ActivityEvent } from "@/lib/activity";
+import { diffExposure, diffNetwork, diffPersistence, diffProcesses, pushEvents, type ActivityEvent } from "@/lib/activity";
+import { GRADE_TONE } from "@/lib/hardening";
+import { trust } from "@/lib/persistence";
 import { fmtBytes, fmtUptime } from "@/lib/host";
 import { aggregateNodes, aggregatePorts } from "@/lib/netmap";
 import { buildTree, hintsFor } from "@/lib/proctree";
@@ -26,17 +37,21 @@ import { buildApps, exeKey, type AppGroup } from "@/lib/apps";
 import { CpuPanel, RamPanel, StoragePanel } from "@/components/system/hardware-panels";
 import { CityPanel } from "@/components/system/city-panel";
 import { ProcessPanel } from "@/components/system/process-panel";
-import { SelectionCard, type Notice, type ProcAction, type ProcActions } from "@/components/system/process-details";
+import { SelectionCard, StartupLookup, type Notice, type ProcAction, type ProcActions } from "@/components/system/process-details";
 import { AppsPanel } from "@/components/system/apps-panel";
 import { LineagePanel } from "@/components/system/lineage-panel";
 import { ActivityFeed } from "@/components/system/activity-feed";
 import { ConnectionsPanel, NetworkMapPanel } from "@/components/system/network-panels";
 import { PortsPanel, RampartPanel, type FirewallActions } from "@/components/system/ports-panels";
+import { PersistenceView } from "@/components/system/persistence-view";
+import { HardeningView } from "@/components/system/hardening-view";
 
 const METRICS_MS = 2000;
 const PROCESSES_MS = 3000; // instantané natif (~15 ms côté backend)
 const NETWORK_MS = 5000;
 const EXPOSURE_MS = 15000; // règles du pare-feu mises en cache 15 s côté backend
+const PERSISTENCE_MS = 60000; // inventaire mis en cache 60 s côté backend (balayage ~2 s)
+const HARDENING_MS = 120000;
 const CITY_SIZE = 60; // = MAX_BUILDINGS de la ville 3D
 
 const VIEWS = [
@@ -44,6 +59,8 @@ const VIEWS = [
   { key: "reseau", label: "Réseau" },
   { key: "processus", label: "Processus & activité" },
   { key: "ports", label: "Ports & pare-feu" },
+  { key: "persistance", label: "Persistance" },
+  { key: "durcissement", label: "Durcissement" },
 ] as const;
 type View = (typeof VIEWS)[number]["key"];
 
@@ -86,6 +103,14 @@ function MachinesView() {
   const prevProcs = useRef<ProcInfo[] | null>(null);
   const prevNet = useRef<NetSnapshot | null>(null);
   const prevExposure = useRef<ExposureSnapshot | null>(null);
+  const prevPersist = useRef<PersistenceSnapshot | null>(null);
+  const [persist, setPersist] = useState<PersistenceSnapshot | null>(null);
+  const [persistError, setPersistError] = useState<string | null>(null);
+  const [persistSelected, setPersistSelected] = useState<string | null>(null);
+  const [hard, setHard] = useState<HardeningSnapshot | null>(null);
+  const [hardError, setHardError] = useState<string | null>(null);
+  const [remedyLog, setRemedyLog] = useState<RemedyRecord[]>([]);
+  const [user, setUser] = useState<User | null>(null);
 
   const loadMetrics = useCallback(async () => {
     try {
@@ -144,10 +169,46 @@ function MachinesView() {
     }
   }, []);
 
+  const loadPersistence = useCallback(async () => {
+    try {
+      const next = await fetchPersistence();
+      const prev = prevPersist.current;
+      prevPersist.current = next;
+      if (prev) setEvents((log) => pushEvents(log, diffPersistence(prev, next, Date.now())));
+      setPersist(next);
+      setPersistError(null);
+    } catch (e) {
+      setPersistError(e instanceof Error ? e.message : "Inventaire de persistance indisponible");
+    }
+  }, []);
+
+  const loadHardening = useCallback(async () => {
+    try {
+      const [h, r] = await Promise.all([fetchHardening(), fetchRemedies()]);
+      setHard(h);
+      setRemedyLog(r.history);
+      setHardError(null);
+    } catch (e) {
+      setHardError(e instanceof Error ? e.message : "Durcissement illisible");
+    }
+  }, []);
+
   usePolling(loadMetrics, METRICS_MS);
+  usePolling(loadPersistence, PERSISTENCE_MS);
+  usePolling(loadHardening, HARDENING_MS);
   usePolling(loadProcs, PROCESSES_MS);
   usePolling(loadNet, NETWORK_MS);
   usePolling(loadExposure, EXPOSURE_MS);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchMe()
+      .then((u) => !cancelled && setUser(u))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -256,12 +317,42 @@ function MachinesView() {
       }),
   };
 
+  // Exécutable -> PID (fiche de persistance : « en cours d'exécution ») et exécutable -> entrée de
+  // persistance (fiche processus : « se relance au démarrage »). Chemins comparés sans la casse.
+  const pidByExe = useMemo(() => {
+    const map = new Map<string, number>();
+    procs?.forEach((p) => {
+      if (p.exe && !map.has(p.exe.toLowerCase())) map.set(p.exe.toLowerCase(), p.pid);
+    });
+    return map;
+  }, [procs]);
+  const entryByExe = useMemo(() => {
+    const map = new Map<string, PersistenceEntry>();
+    persist?.entries.forEach((e) => {
+      if (e.mechanism === "driver" || e.mechanism === "wmi") return;
+      for (const path of [e.image, e.target]) if (path && !map.has(path.toLowerCase())) map.set(path.toLowerCase(), e);
+    });
+    return map;
+  }, [persist]);
+  const startupLookup = useMemo(
+    () => ({
+      find: (exe: string | null) => (exe ? (entryByExe.get(exe.toLowerCase()) ?? null) : null),
+      open: (id: string) => {
+        setPersistSelected(id);
+        router.replace(`${pathname}?vue=persistance`, { scroll: false });
+      },
+    }),
+    [entryByExe, router, pathname],
+  );
+  const runningPid = useCallback((path: string | null) => (path ? (pidByExe.get(path.toLowerCase()) ?? null) : null), [pidByExe]);
+  const freshPersist = persist ? persist.entries.filter((e) => trust(e) === "new").length : null; // hors Microsoft
+
   const established = net?.connections.filter((c) => c.status === "ESTABLISHED").length;
   // « Joignables » = liés au réseau ET autorisés par le pare-feu (et non simplement liés à 0.0.0.0).
   const reachable = exposure ? exposure.summary.open : null;
 
   return (
-    <>
+    <StartupLookup.Provider value={startupLookup}>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2.5">
@@ -292,6 +383,8 @@ function MachinesView() {
           <Stat label="Processus" value={m?.process_count ?? "—"} />
           <Stat label="Connexions" value={established ?? "—"} />
           <Stat label="Ports joignables" value={reachable ?? "—"} tone={reachable ? "warn" : undefined} />
+          <Stat label="Persistances nouvelles" value={freshPersist ?? "—"} tone={freshPersist ? "critical" : undefined} />
+          <Stat label="Durcissement" value={hard ? `${hard.summary.grade} · ${hard.summary.ok}/${hard.summary.total}` : "—"} tone={hard ? GRADE_TONE[hard.summary.grade] : undefined} />
           <Stat label="Réseau" value={m ? `↓ ${fmtBytes(m.net_down)}/s · ↑ ${fmtBytes(m.net_up)}/s` : "—"} />
         </div>
       </div>
@@ -404,7 +497,28 @@ function MachinesView() {
           />
         </div>
       )}
-    </>
+
+      {view === "persistance" && (
+        <div className={`${GRID} lg:grid-rows-2`}>
+          <PersistenceView
+            snapshot={persist}
+            error={persistError}
+            user={user}
+            runningPid={runningPid}
+            selected={persistSelected}
+            onSelect={setPersistSelected}
+            onChanged={loadPersistence}
+            onOpenProcess={openProcess}
+          />
+        </div>
+      )}
+
+      {view === "durcissement" && (
+        <div className={`${GRID} lg:grid-rows-[minmax(0,1.2fr)_minmax(0,1fr)]`}>
+          <HardeningView snapshot={hard} history={remedyLog} error={hardError} user={user} onChanged={loadHardening} />
+        </div>
+      )}
+    </StartupLookup.Provider>
   );
 }
 

@@ -36,7 +36,7 @@ from app.routers import (
     system_control,
     threatintel,
 )
-from app.services import attack, winlog_collector
+from app.services import attack, persistence, winlog_collector
 from app.threatintel import feeds, vulns
 from app.services.events import ensure_events_index, repair_missing_messages
 
@@ -101,10 +101,13 @@ async def lifespan(app: FastAPI):
     warmup = asyncio.create_task(asyncio.to_thread(attack.static_rules))
     # Threat Intel : listes publiques (au démarrage puis toutes les 12 h) et vulnérabilités du poste.
     intel = [asyncio.create_task(feeds.run_forever()), asyncio.create_task(vulns.run_forever())] if settings.intel_feeds else []
+    watch = asyncio.create_task(persistence.run_forever()) if settings.persistence_watch else None
     yield
     warmup.cancel()
     for task in intel:
         task.cancel()
+    if watch is not None:
+        watch.cancel()
     if collector is not None:
         collector.cancel()
         with contextlib.suppress(asyncio.CancelledError):

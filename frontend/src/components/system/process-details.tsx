@@ -1,11 +1,17 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
-import type { ProcInfo } from "@/lib/api";
+import { createContext, useContext, useState, type ReactNode } from "react";
+import type { PersistenceEntry, ProcInfo } from "@/lib/api";
 import { appRootOf, exeKey, subtree } from "@/lib/apps";
 import { fmtBytes, loadTone, machineLoad } from "@/lib/host";
 import { hintsFor, type TreeNode } from "@/lib/proctree";
 import { fmtAgo } from "@/lib/time";
+import { MECHANISM_LABEL, signatureText } from "@/lib/persistence";
+
+/** Entrée de persistance qui relance cet exécutable au démarrage (fournie par la page Système). */
+export const StartupLookup = createContext<{ find: (exe: string | null) => PersistenceEntry | null; open: (id: string) => void }>({ find: () => null, open: () => undefined });
+
+const SIG_TONE = { microsoft: "muted", signed: "cyan", unsigned: "warn", invalid: "warn", unknown: "muted" } as const;
 
 export type ProcAction = "close" | "kill";
 export type Notice = { tone: "ok" | "warn" | "critical"; text: string };
@@ -109,6 +115,9 @@ function ProcessDetails({
   const hints = hintsFor(node);
   const parent = node.parent?.proc ?? null;
   const busy = actions.busy !== null;
+  const startup = useContext(StartupLookup);
+  const persisted = startup.find(proc.exe);
+  const [fullCmd, setFullCmd] = useState(false);
 
   return (
     <div>
@@ -141,6 +150,17 @@ function ProcessDetails({
         {hasWindow && <Badge tone="cyan">▣ possède la fenêtre</Badge>}
         {proc.status === "stopped" && <Badge tone="warn">suspendu</Badge>}
         {proc.exe === null && <Badge tone="muted">chemin inaccessible</Badge>}
+        {proc.signature && proc.exe && (
+          <Badge tone={SIG_TONE[proc.signature.verdict]} title={signatureText(proc.signature, proc.exe)}>
+            {proc.signature.verdict === "unsigned" || proc.signature.verdict === "invalid" ? "⚠ " : "✓ "}
+            {signatureText(proc.signature, proc.exe)}
+          </Badge>
+        )}
+        {persisted && (
+          <button onClick={() => startup.open(persisted.id)} className="max-w-full" title="Voir l'entrée de persistance">
+            <Badge tone="cyan">↻ se relance au démarrage · {MECHANISM_LABEL[persisted.mechanism]}</Badge>
+          </button>
+        )}
         {hints.map((h) => (
           <Badge key={h.id} tone="warn" title={h.label}>
             ⚑ {h.label} · {h.attack}
@@ -169,6 +189,15 @@ function ProcessDetails({
             <code className="block break-all rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] leading-snug">{proc.exe}</code>
           ) : (
             <span className="text-muted">inaccessible sans droits administrateur</span>
+          )}
+        </Field>
+        <Field label="Commande">
+          {proc.cmdline ? (
+            <button onClick={() => setFullCmd((v) => !v)} className="block w-full text-left" title={fullCmd ? "Réduire" : "Afficher la commande complète"}>
+              <code className={`block break-all rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] leading-snug ${fullCmd ? "" : "line-clamp-2"}`}>{proc.cmdline}</code>
+            </button>
+          ) : (
+            <span className="text-muted">{proc.exe === null ? "protégée (processus système)" : "—"}</span>
           )}
         </Field>
         <Field label="Lancé par">

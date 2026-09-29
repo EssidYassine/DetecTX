@@ -3,6 +3,7 @@
 import ipaddress
 import os
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -10,7 +11,7 @@ from datetime import datetime, timezone
 
 import psutil
 
-from app.services import winproc
+from app.services import authenticode, winproc
 
 # PID protégés : System Idle, System, et le backend lui-même.
 _PROTECTED = {0, 4, os.getpid()}
@@ -82,7 +83,7 @@ def snapshot() -> dict:
 
 _PROC_ATTRS = [
     "pid", "ppid", "name", "memory_percent", "cpu_percent", "memory_info",
-    "username", "exe", "status", "create_time",
+    "username", "exe", "status", "create_time", "cmdline",
 ]
 
 # Chemin natif Windows : taux CPU / E/S calculés par différence entre deux instantanés.
@@ -90,15 +91,17 @@ _MIN_WINDOW = 1.0  # s : fenêtre minimale de mesure (plusieurs clients peuvent 
 # (pid, create_time) -> (cpu_s, io_bytes, instant de la mesure) : horodatage PAR processus,
 # pour qu'un processus apparu entre deux fenêtres ait quand même sa référence.
 _baseline: dict[tuple, tuple[float, int, float]] = {}
-_identity: dict[tuple, tuple[str | None, str | None]] = {}  # (pid, create_time) -> (exe, user)
+_identity: dict[tuple, tuple[str | None, str | None, str | None]] = {}  # (pid, create_time) -> (exe, user, cmdline)
+MAX_CMDLINE = 4096
 
 
-def _proc_identity(pid: int, key: tuple) -> tuple[str | None, str | None]:
-    """Chemin et utilisateur : immuables pour une instance de processus, donc mis en cache."""
+def _proc_identity(pid: int, key: tuple) -> tuple[str | None, str | None, str | None]:
+    """Chemin, utilisateur et ligne de commande : immuables pour une instance de processus, donc
+    mis en cache. Ligne de commande None = refusée (processus protégé, sans droits admin)."""
     cached = _identity.get(key)
     if cached is not None:
         return cached
-    exe = user = None
+    exe = user = cmdline = None
     try:
         proc = psutil.Process(pid)
         try:
@@ -111,10 +114,27 @@ def _proc_identity(pid: int, key: tuple) -> tuple[str | None, str | None]:
             user = proc.username()
         except (psutil.AccessDenied, psutil.ZombieProcess, OSError):
             pass
+        try:
+            args = proc.cmdline()
+            cmdline = subprocess.list2cmdline(args)[:MAX_CMDLINE] if args else None
+        except (psutil.AccessDenied, psutil.ZombieProcess, OSError):
+            pass
     except psutil.NoSuchProcess:
         pass
-    _identity[key] = (exe, user)
-    return exe, user
+    _identity[key] = (exe, user, cmdline)
+    return exe, user, cmdline
+
+
+def _with_signatures(procs: list[dict]) -> list[dict]:
+    """Signature de l'exécutable (déjà calculée, sinon demandée en tâche de fond : jamais bloquant)."""
+    missing = []
+    for p in procs:
+        sig = authenticode.cached(p["exe"])
+        if sig is None and p["exe"]:
+            missing.append(p["exe"])
+        p["signature"] = sig.as_dict() if sig else None
+    authenticode.schedule(missing)
+    return procs
 
 
 def _native_processes() -> list[dict]:
@@ -140,7 +160,7 @@ def _native_processes() -> list[dict]:
             # interrogent à 50 ms d'écart ne doivent pas produire des taux bruités.
             if window >= _MIN_WINDOW:
                 _baseline[key] = (r.cpu_seconds, r.io_bytes, now)
-        exe, user = _proc_identity(r.pid, key)
+        exe, user, cmdline = _proc_identity(r.pid, key)
         procs.append(
             {
                 "pid": r.pid,
@@ -154,6 +174,7 @@ def _native_processes() -> list[dict]:
                 "windows": len(windows.get(r.pid, ())),
                 "username": user,
                 "exe": exe,
+                "cmdline": cmdline,
                 "status": "stopped" if r.suspended else "running",
                 "started_at": datetime.fromtimestamp(r.create_time, timezone.utc).isoformat() if r.create_time else None,
             }
@@ -186,6 +207,7 @@ def _psutil_processes() -> list[dict]:
                 "windows": None,
                 "username": info.get("username"),
                 "exe": info.get("exe") or None,
+                "cmdline": subprocess.list2cmdline(info["cmdline"])[:MAX_CMDLINE] if info.get("cmdline") else None,
                 "status": info.get("status"),
                 "started_at": datetime.fromtimestamp(started, timezone.utc).isoformat() if started else None,
             }
@@ -200,7 +222,7 @@ def top_processes(n: int = 8) -> list[dict]:
     with _iter_lock:
         procs = _native_processes() if winproc.SUPPORTED else _psutil_processes()
     procs.sort(key=lambda x: x["memory_percent"], reverse=True)
-    return procs[:n]
+    return _with_signatures(procs[:n])
 
 
 # ─────────────────────────────── réseau

@@ -571,6 +571,19 @@ export interface ProcInfo {
   threads: number | null;
   /** Fenêtres d'application (barre des tâches) possédées par CE processus ; null hors Windows. */
   windows: number | null;
+  /** Ligne de commande ; null = refusée (processus protégé, sans droits admin). */
+  cmdline?: string | null;
+  /** Signature de l'exécutable ; null = pas encore vérifiée (calcul en arrière-plan). */
+  signature?: Signature | null;
+}
+
+export type SignatureVerdict = "microsoft" | "signed" | "unsigned" | "invalid" | "unknown";
+
+export interface Signature {
+  verdict: SignatureVerdict;
+  publisher: string | null;
+  via_catalog: boolean;
+  detail: string | null;
 }
 
 export async function fetchMetrics(): Promise<Metrics> {
@@ -1151,3 +1164,109 @@ export async function runDetection(): Promise<{ rules_run: number; alerts_create
   if (!res.ok) throw new Error(await readError(res));
   return (await res.json()) as { rules_run: number; alerts_created: number };
 }
+
+// ─────────────────────────────── Système : persistance, durcissement, remèdes
+export type PersistenceMechanism = "run" | "startup" | "task" | "service" | "driver" | "wmi";
+export type PersistenceScope = "user" | "machine" | "system" | "kernel";
+
+export interface PersistenceEntry {
+  id: string;
+  mechanism: PersistenceMechanism;
+  name: string;
+  location: string;
+  command: string;
+  scope: PersistenceScope;
+  enabled: boolean | null;
+  image: string | null;
+  target: string | null;
+  account: string | null;
+  detail: string | null;
+  builtin: boolean;
+  can_disable: boolean;
+  /** De quoi la désactiver : hive HKCU = sans invite UAC (comme le Gestionnaire des tâches). */
+  control: { kind: "startup" | "task" | "service"; hive?: "HKCU" | "HKLM" } | null;
+  attack: string;
+  status: "baseline" | "new" | "modified";
+  first_seen: string | null;
+  changed_at: string | null;
+  signature: Signature | null;
+}
+
+export interface PersistenceSnapshot {
+  scanned_at: string;
+  baseline_at: string | null;
+  entries: PersistenceEntry[];
+  errors: Record<string, string>;
+  alerts_raised: number;
+  signatures_pending: number;
+}
+
+export type HardeningState = "ok" | "weak" | "na" | "unknown";
+export type HardeningLevel = "high" | "medium" | "low";
+
+export interface HardeningControl {
+  id: string;
+  theme: string;
+  title: string;
+  state: HardeningState;
+  level: HardeningLevel;
+  observed: string;
+  why: string;
+  advice: string | null;
+  remedy: string | null;
+  link: { uri: string; label: string } | null;
+  reboot: boolean;
+  attack: string | null;
+  details: string[];
+}
+
+export interface RemedyMeta {
+  title: string;
+  change: string;
+  reboot: boolean;
+  revertible: boolean;
+}
+
+export interface HardeningSnapshot {
+  controls: HardeningControl[];
+  summary: { ok: number; total: number; weak: Record<HardeningLevel, number>; fixable: number; score: number; grade: "A" | "B" | "C" | "D" | "E" };
+  themes: Record<string, string>;
+  remedies: Record<string, RemedyMeta>;
+}
+
+export interface RemedyRecord {
+  id: string;
+  at: string;
+  kind: "hardening" | "persistence";
+  fix: string;
+  label: string;
+  change: string;
+  revertible: boolean;
+  reboot: boolean;
+  actor: string;
+  reverted_at: string | null;
+  entry_id?: string;
+}
+
+export interface RemedyResult {
+  ok: boolean;
+  already: boolean;
+  detail: string;
+  record: RemedyRecord | null;
+}
+
+async function metricsCall<T>(path: string, init?: { method: "POST"; body?: unknown }): Promise<T> {
+  const headers: HeadersInit = init?.body !== undefined ? { ...authHeaders(), "Content-Type": "application/json" } : authHeaders();
+  const res = await fetch(`${API_URL}/metrics${path}`, { method: init?.method ?? "GET", headers, body: init?.body !== undefined ? JSON.stringify(init.body) : undefined });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as T;
+}
+
+export const fetchPersistence = () => metricsCall<PersistenceSnapshot>("/persistence");
+export const resetPersistenceBaseline = () => metricsCall<PersistenceSnapshot>("/persistence/baseline", { method: "POST" });
+export const approvePersistence = (id: string) => metricsCall<{ ok: boolean }>(`/persistence/${encodeURIComponent(id)}/approve`, { method: "POST" });
+export const setPersistenceState = (id: string, enabled: boolean) => metricsCall<RemedyResult>(`/persistence/${encodeURIComponent(id)}/state`, { method: "POST", body: { enabled } });
+export const fetchHardening = () => metricsCall<HardeningSnapshot>("/hardening");
+export const fetchRemedies = () => metricsCall<{ catalog: Record<string, RemedyMeta>; history: RemedyRecord[] }>("/remedies");
+export const applyRemedy = (fix: string) => metricsCall<RemedyResult>(`/remedies/${encodeURIComponent(fix)}`, { method: "POST" });
+export const revertRemedy = (recordId: string) => metricsCall<{ ok: boolean; detail: string }>(`/remedies/history/${encodeURIComponent(recordId)}/revert`, { method: "POST" });

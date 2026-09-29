@@ -64,7 +64,7 @@ function isAncestor(candidate: TreeNode, node: TreeNode | null): boolean {
 
 // ─────────────────────────────── indices
 export interface Hint {
-  id: "office-shell" | "temp-path" | "masquerade" | "svchost-parent";
+  id: "office-shell" | "temp-path" | "masquerade" | "svchost-parent" | "encoded-command" | "unsigned-user" | "proxy-exec";
   label: string;
   /** Technique MITRE ATT&CK correspondante (référence, pas un verdict). */
   attack: string;
@@ -88,6 +88,14 @@ const SYSTEM_BINARIES: Record<string, string[]> = {
 };
 const TEMP_DIRS = ["\\appdata\\local\\temp\\", "\\downloads\\", "\\users\\public\\", "\\$recycle.bin\\", "\\windows\\temp\\"];
 
+const USER_DIRS = ["\\appdata\\", "\\downloads\\", "\\temp\\", "\\users\\public\\"];
+// PowerShell : -enc / -EncodedCommand (et ses abréviations -e, -en, -ec…) suivi d'un bloc base64,
+// ou script téléchargé puis exécuté en mémoire.
+const ENCODED = /(?:^|\s)[-/](?:e|ec|en[a-z]*)\s+[a-z0-9+/=]{16,}|frombase64string|downloadstring|invoke-expression|\biex\b/i;
+// Binaires Windows détournés pour exécuter du code distant ou hors des dossiers système.
+const PROXIES = new Set(["rundll32.exe", "regsvr32.exe", "mshta.exe"]);
+const REMOTE_OR_USER = /https?:|javascript:|vbscript:|\\appdata\\|\\temp\\|\\downloads\\|\\users\\public\\|scrobj\.dll/i;
+
 const dirOf = (path: string) => path.slice(0, path.lastIndexOf("\\")).toLowerCase();
 
 export function hintsFor(node: TreeNode): Hint[] {
@@ -108,6 +116,17 @@ export function hintsFor(node: TreeNode): Hint[] {
   }
   if (name === "svchost.exe" && node.parent && parentName !== "services.exe") {
     hints.push({ id: "svchost-parent", label: `svchost.exe lancé par ${node.parent.proc.name} au lieu de services.exe`, attack: "T1036" });
+  }
+  const cmd = node.proc.cmdline ?? "";
+  if ((name === "powershell.exe" || name === "pwsh.exe") && ENCODED.test(cmd)) {
+    hints.push({ id: "encoded-command", label: "PowerShell avec commande encodée ou téléchargée", attack: "T1059.001" });
+  }
+  const sig = node.proc.signature?.verdict;
+  if ((sig === "unsigned" || sig === "invalid") && exe && USER_DIRS.some((d) => exe.toLowerCase().includes(d))) {
+    hints.push({ id: "unsigned-user", label: "Programme non signé lancé depuis un dossier utilisateur", attack: "T1204.002" });
+  }
+  if (PROXIES.has(name) && REMOTE_OR_USER.test(cmd)) {
+    hints.push({ id: "proxy-exec", label: `${node.proc.name} charge du code distant ou d'un dossier utilisateur`, attack: "T1218" });
   }
   return hints;
 }
