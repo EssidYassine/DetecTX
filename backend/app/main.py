@@ -36,7 +36,7 @@ from app.routers import (
     threatintel,
 )
 from app.services import winlog_collector
-from app.services.events import ensure_events_index
+from app.services.events import ensure_events_index, repair_missing_messages
 
 logger = logging.getLogger("detectx")
 settings = get_settings()
@@ -83,6 +83,14 @@ async def lifespan(app: FastAPI):
         await ensure_events_index()
     except Exception as exc:
         logger.warning("index events non initialisé (OpenSearch indisponible ?): %s", exc)
+
+    # Événements stockés sans texte (éditeurs sans modèle de message) : message reconstitué.
+    try:
+        fixed = await repair_missing_messages()
+        if fixed:
+            logger.info("%d événement(s) sans message complété(s) à partir de leurs valeurs brutes", fixed)
+    except Exception as exc:  # noqa: BLE001 - une réparation ratée ne doit pas empêcher le démarrage
+        logger.warning("réparation des messages manquants impossible : %s", exc)
 
     logger.info("DeTecTX backend %s démarré (provider LLM: %s)", __version__, settings.llm_provider)
     collector = asyncio.create_task(winlog_collector.run_forever()) if winlog_collector.is_enabled() else None

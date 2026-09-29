@@ -464,6 +464,7 @@ export interface CustomRule {
   threshold_minutes: number | null;
   enabled: boolean;
   created_at: string;
+  alerts: number; // alertes produites par la règle
 }
 
 export interface RuleInput {
@@ -482,6 +483,26 @@ export async function fetchCustomRules(): Promise<CustomRule[]> {
   const res = await fetch(`${API_URL}/rules`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await readError(res));
   return (await res.json()) as CustomRule[];
+}
+
+/** Ce que la règle aurait trouvé (24 h / 7 j) avant de l'enregistrer. Lecture seule. */
+export interface RulePreview {
+  matches_24h: number;
+  matches_7d: number;
+  samples: EventItem[];
+  noisy: boolean;
+  would_alert: number;
+}
+
+export async function previewRule(input: RuleInput, signal?: AbortSignal): Promise<RulePreview> {
+  const res = await fetch(`${API_URL}/rules/preview`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as RulePreview;
 }
 
 export async function createRule(input: RuleInput): Promise<CustomRule> {

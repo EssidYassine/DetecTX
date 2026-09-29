@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { fetchEventDetail, type EventDetail } from "@/lib/api";
 import { channelLabel, fmtDateTime, INTEREST_LABEL, INTEREST_TONE } from "@/lib/events-ui";
+import { seedFromEvent, type RuleSeed } from "@/lib/rule-seed";
 
 const SEVERITY_TONE: Record<string, string> = { critical: "critical", high: "warn", medium: "warn", low: "accent" };
 const STATUS_LABEL: Record<string, string> = { new: "nouvelle", ack: "prise en charge", closed: "clôturée" };
@@ -17,7 +18,18 @@ function Chip({ tone, children }: { tone: string; children: React.ReactNode }) {
 }
 
 /** Lecteur d'événement : ce qui s'est passé, pourquoi c'est important, ce que ça a déclenché. */
-export function EventReader({ eventId, onClose, className = "" }: { eventId: string | null; onClose: () => void; className?: string }) {
+export function EventReader({
+  eventId,
+  onClose,
+  onCreateRule,
+  className = "",
+}: {
+  eventId: string | null;
+  onClose: () => void;
+  /** Ouvre le constructeur de règle pré-rempli avec cet événement. */
+  onCreateRule?: (seed: RuleSeed) => void;
+  className?: string;
+}) {
   const [state, setState] = useState<{ id: string; detail: EventDetail | null; error: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
   const loading = eventId !== null && state?.id !== eventId;
@@ -65,6 +77,14 @@ export function EventReader({ eventId, onClose, className = "" }: { eventId: str
               {k?.attack && <Chip tone="muted">ATT&amp;CK {k.attack}</Chip>}
               {detail.alerts.length > 0 && <Chip tone="critical">{detail.alerts.length} alerte(s)</Chip>}
             </div>
+            {onCreateRule && (
+              <button
+                onClick={() => onCreateRule(seedFromEvent(detail))}
+                className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/20"
+              >
+                <span aria-hidden="true">◆</span> Créer une règle de détection depuis cet événement
+              </button>
+            )}
 
             {k ? (
               <div className="mt-3 space-y-1.5 rounded-lg border border-line p-2.5">

@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import get_settings
+from app.detection.event_narrator import fallback_message
 from app.schemas.events import IngestEvent
 from app.services import collection, events
 
@@ -176,7 +177,8 @@ def read_source(source: Source, after: int | None, formatter: _Formatter) -> tup
                     computer=ev["computer"],
                     level=ev["level"],
                     record_id=ev["record_id"],
-                    message=formatter.message(h, ev["provider"]),
+                    # Éditeur sans modèle de texte : valeurs brutes, comme l'Observateur d'événements.
+                    message=formatter.message(h, ev["provider"]) or fallback_message(ev["fields"], ev["provider"]),
                     raw=ev["fields"],
                 )
             )

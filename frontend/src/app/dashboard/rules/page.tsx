@@ -1,71 +1,46 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  createRule,
-  deleteRule,
-  fetchCustomRules,
-  toggleRule,
-  type CustomRule,
-  type RuleInput,
-} from "@/lib/api";
+import Link from "next/link";
+import { deleteRule, fetchCustomRules, toggleRule, type CustomRule } from "@/lib/api";
+import { channelLabel } from "@/lib/events-ui";
 import { EmptyState, SeverityBadge } from "@/components/ui";
 
-const CHANNELS = [
-  { value: "", label: "Tous les canaux" },
-  { value: "Security", label: "Security" },
-  { value: "System", label: "System" },
-  { value: "Application", label: "Application" },
-  { value: "Microsoft-Windows-Sysmon/Operational", label: "Sysmon" },
-  { value: "Microsoft-Windows-PowerShell/Operational", label: "PowerShell" },
-  { value: "DeTecTX-FileMonitor", label: "Activité fichiers" },
+const STEPS = [
+  { n: 1, title: "Ouvrez les journaux", text: "Trouvez l'événement qui vous intéresse, ou lancez une recherche." },
+  { n: 2, title: "« Créer une règle »", text: "Depuis le lecteur d'événement, ou « En faire une règle » depuis la recherche." },
+  { n: 3, title: "Vérifiez l'aperçu", text: "Combien d'événements elle aurait trouvés sur 24 h et 7 jours, avant d'enregistrer." },
 ];
 
-const EMPTY: RuleInput = { title: "", level: "medium", keywords: [] };
-
 export default function RulesPage() {
-  const [rules, setRules] = useState<CustomRule[]>([]);
-  const [form, setForm] = useState({
-    title: "",
-    level: "medium",
-    mitre: "",
-    channel: "",
-    keywords: "",
-    threshold_count: "",
-    threshold_minutes: "",
-  });
+  const [rules, setRules] = useState<CustomRule[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState<number | null>(null);
 
   const load = useCallback(async () => {
-    setRules(await fetchCustomRules().catch(() => []));
+    try {
+      setRules(await fetchCustomRules());
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Lecture des règles impossible");
+    }
   }, []);
   useEffect(() => {
-    void load();
-  }, [load]);
+    let cancelled = false;
+    fetchCustomRules()
+      .then((r) => !cancelled && setRules(r))
+      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "Lecture des règles impossible"));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSaving(true);
+  async function act(fn: () => Promise<unknown>) {
     try {
-      const input: RuleInput = {
-        ...EMPTY,
-        title: form.title,
-        level: form.level,
-        mitre: form.mitre || undefined,
-        channel: form.channel || undefined,
-        keywords: form.keywords.split(",").map((k) => k.trim()).filter(Boolean),
-        threshold_count: form.threshold_count ? Number(form.threshold_count) : null,
-        threshold_minutes: form.threshold_minutes ? Number(form.threshold_minutes) : null,
-      };
-      await createRule(input);
-      setForm({ title: "", level: "medium", mitre: "", channel: "", keywords: "", threshold_count: "", threshold_minutes: "" });
+      await fn();
       await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur");
-    } finally {
-      setSaving(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Action impossible");
     }
   }
 
@@ -73,60 +48,35 @@ export default function RulesPage() {
     <>
       <div>
         <h1 className="text-lg font-semibold">Règles de détection</h1>
-        <p className="text-sm text-muted">
-          Créez vos propres règles — elles s’ajoutent au moteur (interne + SigmaHQ) au prochain scan.
-        </p>
+        <p className="text-sm text-muted">Vos règles s&apos;ajoutent au moteur (règles internes + SigmaHQ) à chaque exécution de la détection.</p>
       </div>
 
-      {/* Formulaire de création */}
-      <form onSubmit={submit} className="rounded-2xl border border-line bg-surface p-5">
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Titre de la règle *">
-            <input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
-              placeholder="Ex. Exécution de whoami" className={inputCls} />
-          </Field>
-          <Field label="Mots-clés (séparés par des virgules)">
-            <input value={form.keywords} onChange={(e) => setForm({ ...form, keywords: e.target.value })}
-              placeholder="whoami, net user, mimikatz" className={inputCls} />
-          </Field>
-          <Field label="Sévérité">
-            <select value={form.level} onChange={(e) => setForm({ ...form, level: e.target.value })} className={inputCls}>
-              <option value="critical">Critical</option>
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-            </select>
-          </Field>
-          <Field label="Technique MITRE (optionnel)">
-            <input value={form.mitre} onChange={(e) => setForm({ ...form, mitre: e.target.value })}
-              placeholder="T1059.001" className={inputCls} />
-          </Field>
-          <Field label="Canal (optionnel)">
-            <select value={form.channel} onChange={(e) => setForm({ ...form, channel: e.target.value })} className={inputCls}>
-              {CHANNELS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-            </select>
-          </Field>
-          <Field label="Seuil (optionnel) : N occurrences / M minutes">
-            <div className="flex gap-2">
-              <input type="number" min={1} value={form.threshold_count} onChange={(e) => setForm({ ...form, threshold_count: e.target.value })}
-                placeholder="N" className={inputCls} />
-              <input type="number" min={1} value={form.threshold_minutes} onChange={(e) => setForm({ ...form, threshold_minutes: e.target.value })}
-                placeholder="min" className={inputCls} />
-            </div>
-          </Field>
+      {/* Créer : toujours à partir de données réelles */}
+      <section className="flex flex-wrap items-center gap-6 rounded-2xl border border-accent/30 bg-accent/5 p-5">
+        <div className="min-w-0 flex-1">
+          <p className="font-medium">Une règle se crée à partir de ce que la machine a réellement enregistré.</p>
+          <ol className="mt-3 grid gap-3 sm:grid-cols-3">
+            {STEPS.map((s) => (
+              <li key={s.n} className="flex gap-2.5">
+                <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-accent/15 font-mono text-xs text-accent">{s.n}</span>
+                <span className="text-sm">
+                  <span className="block font-medium">{s.title}</span>
+                  <span className="text-xs text-muted">{s.text}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
         </div>
-        {error && <p className="mt-3 text-sm text-critical">{error}</p>}
-        <button type="submit" disabled={saving}
-          className="mt-4 rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-accent-fg transition hover:brightness-110 disabled:opacity-50">
-          {saving ? "Création…" : "Créer la règle"}
-        </button>
-      </form>
+        <Link href="/dashboard/events" className="shrink-0 rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-accent-fg transition hover:brightness-110">
+          Créer depuis les journaux →
+        </Link>
+      </section>
 
-      {/* Liste */}
       <section className="rounded-2xl border border-line bg-surface">
-        <h2 className="border-b border-line px-5 py-3 font-medium">Mes règles ({rules.length})</h2>
-        {rules.length === 0 ? (
-          <EmptyState>Aucune règle personnalisée. Créez-en une ci-dessus.</EmptyState>
+        <h2 className="border-b border-line px-5 py-3 font-medium">Mes règles ({rules?.length ?? "…"})</h2>
+        {error && <p className="px-5 py-3 text-sm text-critical">{error}</p>}
+        {rules && rules.length === 0 ? (
+          <EmptyState>Aucune règle personnalisée pour l&apos;instant.</EmptyState>
         ) : (
           <table className="w-full text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-muted">
@@ -134,41 +84,64 @@ export default function RulesPage() {
                 <th className="px-5 py-2.5 font-medium">État</th>
                 <th className="px-3 py-2.5 font-medium">Titre</th>
                 <th className="px-3 py-2.5 font-medium">Sévérité</th>
-                <th className="px-3 py-2.5 font-medium">MITRE</th>
                 <th className="px-3 py-2.5 font-medium">Critères</th>
-                <th className="px-5 py-2.5 font-medium"></th>
+                <th className="px-3 py-2.5 text-right font-medium">Alertes</th>
+                <th className="px-5 py-2.5 font-medium" />
               </tr>
             </thead>
             <tbody>
-              {rules.map((r) => (
+              {(rules ?? []).map((r) => (
                 <tr key={r.id} className="border-b border-line/50 hover:bg-surface-2">
                   <td className="px-5 py-2.5">
                     <button
-                      onClick={async () => { await toggleRule(r.id); await load(); }}
+                      onClick={() => act(() => toggleRule(r.id))}
                       className="rounded-full px-2 py-0.5 text-xs font-medium"
-                      style={{
-                        color: `var(--${r.enabled ? "ok" : "muted"})`,
-                        backgroundColor: `color-mix(in srgb, var(--${r.enabled ? "ok" : "muted"}) 15%, transparent)`,
-                      }}
+                      style={{ color: `var(--${r.enabled ? "accent" : "muted"})`, backgroundColor: `color-mix(in srgb, var(--${r.enabled ? "accent" : "muted"}) 15%, transparent)` }}
                     >
                       {r.enabled ? "Activée" : "Désactivée"}
                     </button>
                   </td>
-                  <td className="px-3 py-2.5">{r.title}</td>
-                  <td className="px-3 py-2.5"><SeverityBadge severity={r.level} /></td>
-                  <td className="px-3 py-2.5 font-mono text-xs text-accent">{r.mitre ?? "—"}</td>
-                  <td className="max-w-xs truncate px-3 py-2.5 text-xs text-muted">
-                    {r.keywords.length ? r.keywords.join(", ") : ""}
-                    {r.channel ? ` · ${r.channel}` : ""}
-                    {r.threshold_count ? ` · seuil ${r.threshold_count}/${r.threshold_minutes}min` : ""}
+                  <td className="px-3 py-2.5">
+                    <span className="block font-medium">{r.title}</span>
+                    <span className="font-mono text-[11px] text-muted">
+                      {r.rule_id}
+                      {r.mitre && <span className="ml-2 text-accent">{r.mitre}</span>}
+                    </span>
                   </td>
-                  <td className="px-5 py-2.5 text-right">
-                    <button
-                      onClick={async () => { await deleteRule(r.id); await load(); }}
-                      className="text-xs text-muted transition hover:text-critical"
-                    >
-                      Supprimer
-                    </button>
+                  <td className="px-3 py-2.5">
+                    <SeverityBadge severity={r.level} />
+                  </td>
+                  <td className="max-w-sm px-3 py-2.5 text-xs text-muted">
+                    <span className="block truncate">
+                      {[r.channel && channelLabel(r.channel), r.event_id !== null && `ID ${r.event_id}`].filter(Boolean).join(" · ") || "Tous les journaux"}
+                    </span>
+                    {r.keywords.length > 0 && <span className="block truncate font-mono">{r.keywords.join(" | ")}</span>}
+                    {r.threshold_count && <span className="block">seuil : {r.threshold_count} fois / {r.threshold_minutes} min</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono tabular-nums">
+                    {r.alerts > 0 ? (
+                      <Link href={`/dashboard/alerts?case=${encodeURIComponent(r.rule_id)}`} className="text-accent hover:underline">
+                        {r.alerts}
+                      </Link>
+                    ) : (
+                      <span className="text-muted">0</span>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-5 py-2.5 text-right text-xs">
+                    {confirm === r.id ? (
+                      <>
+                        <button onClick={() => act(() => deleteRule(r.id)).then(() => setConfirm(null))} className="mr-3 font-medium text-critical">
+                          Confirmer
+                        </button>
+                        <button onClick={() => setConfirm(null)} className="text-muted hover:text-foreground">
+                          Annuler
+                        </button>
+                      </>
+                    ) : (
+                      <button onClick={() => setConfirm(r.id)} className="text-muted transition hover:text-critical">
+                        Supprimer
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -177,17 +150,5 @@ export default function RulesPage() {
         )}
       </section>
     </>
-  );
-}
-
-const inputCls =
-  "w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm outline-none focus:border-accent focus:ring-1 focus:ring-accent";
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-sm text-muted">{label}</span>
-      {children}
-    </label>
   );
 }

@@ -338,3 +338,95 @@ def test_api_validation_and_routes(client, db):
     assert client.get("/events", params={"theme": "network"}).status_code == 200
     assert client.get("/events", params={"theme": "inconnu"}).status_code == 404
     assert client.get("/events/feed").status_code == 200
+
+
+# ─────────────────────────────── journaux « muets » (éditeur sans modèle de message)
+def test_fallback_message_and_session_phrases():
+    from app.detection.event_narrator import fallback_message, summarize
+
+    elan = {"Data1": "ELAN/Service", "Data2": "[ELAN Service] WTS_SESSION_UNLOCK"}
+    assert fallback_message(elan, "ELAN/Service") == "[ELAN Service] WTS_SESSION_UNLOCK"  # sans répéter le fournisseur
+    assert fallback_message({}, "x") is None and fallback_message({"Data1": " "}, None) is None
+    assert summarize("Application", 14000, elan, None, "ELAN/Service") == "Session déverrouillée (signalé par ELAN)"
+    lock = {"Data1": "[ELAN Service] WTS_SESSION_LOCK"}
+    assert summarize("Application", 14000, lock, None, None) == "Session verrouillée"
+    spotify = {"Data1": "Spotify SessionConnectedTask: Completed successfully"}
+    assert summarize("Application", 1, spotify, None, "SpotifySessionConnectedTask") == "Spotify SessionConnectedTask: Completed successfully"
+
+
+def test_repair_missing_messages_is_idempotent_and_searchable(db):
+    now = datetime.now(timezone.utc)
+    muted = IngestEvent(timestamp=now, channel="Application", event_id=14000, provider="ELAN/Service", message=None, record_id=1, computer="BINGO",
+                        raw={"Data1": "ELAN/Service", "Data2": "[ELAN Service] WTS_SESSION_UNLOCK"})
+    empty = IngestEvent(timestamp=now, channel="Application", event_id=14000, provider="ELAN/Service", message=None, record_id=2, computer="BINGO", raw={})
+    _ingest(muted, empty)
+    assert asyncio.run(ev.search_events(q="WTS_SESSION_UNLOCK")).total == 0  # invisible avant réparation
+    assert asyncio.run(ev.repair_missing_messages()) == 1
+    assert asyncio.run(ev.repair_missing_messages()) == 0  # idempotent ; l'événement sans valeurs reste vide
+    page = asyncio.run(ev.search_events(q="WTS_SESSION_UNLOCK"))
+    assert page.total == 1 and page.items[0].summary == "Session déverrouillée (signalé par ELAN)"
+
+
+# ─────────────────────────────── règles créées depuis les journaux
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"title": "ok titre", "keywords": ["x"]},  # mot-clé trop court
+        {"title": "ok titre", "keywords": ["a" * 201]},
+        {"title": "ok titre", "keywords": [f"mot{i}" for i in range(11)]},  # plus de 10
+        {"title": "ok titre", "event_id": 70000},
+        {"title": "ok titre", "mitre": "T12"},
+        {"title": "ok titre", "channel": "Security; DROP"},
+        {"title": "ok titre", "event_id": 1, "threshold_count": 5},  # seuil incomplet
+    ],
+)
+def test_rule_input_is_validated(bad):
+    from pydantic import ValidationError
+
+    from app.schemas.rules import RuleIn
+
+    with pytest.raises(ValidationError):
+        RuleIn(**bad)
+
+
+def test_rule_input_is_normalised():
+    from app.schemas.rules import RuleIn
+
+    r = RuleIn(title="  Déverrouillage   poste ", keywords=[" WTS_SESSION_UNLOCK ", "wts_session_unlock", ""], mitre="", channel="")
+    assert r.title == "Déverrouillage poste" and r.keywords == ["WTS_SESSION_UNLOCK"] and r.mitre is None and r.channel is None
+
+
+def test_rule_preview_and_end_to_end_detection(db, monkeypatch):
+    from app import notify
+    from app.routers import rules as rules_router
+    from app.schemas.rules import RuleIn
+    from app.services import alerts as alerts_svc
+
+    now = datetime.now(timezone.utc)
+    events = [
+        IngestEvent(timestamp=now - timedelta(minutes=i), channel="Application", event_id=14000, provider="ELAN/Service", message=None, record_id=100 + i,
+                    computer="BINGO", raw={"Data1": "ELAN/Service", "Data2": f"[ELAN Service] {'WTS_SESSION_UNLOCK' if i % 2 == 0 else 'WTS_SESSION_LOCK'}"})
+        for i in range(6)
+    ]
+    _ingest(*events)
+    asyncio.run(ev.repair_missing_messages())
+
+    payload = RuleIn(title="Déverrouillage du poste", level="low", channel="Application", event_id=14000, keywords=["WTS_SESSION_UNLOCK"])
+    preview = asyncio.run(rules_router.preview_rule(payload, _=None))
+    assert (preview.matches_24h, preview.matches_7d, preview.would_alert, preview.noisy) == (3, 3, 3, False)
+    assert len(preview.samples) == 3 and preview.samples[0].summary.startswith("Session déverrouillée")
+
+    threshold = RuleIn(title="Rafale", channel="Application", event_id=14000, threshold_count=10, threshold_minutes=60)
+    assert asyncio.run(rules_router.preview_rule(threshold, _=None)).would_alert == 0  # 6 < 10
+
+    monkeypatch.setattr(notify, "enabled", lambda: False)  # pas de notification Discord en test
+
+    async def create_and_run():
+        async with db() as session:
+            await rules_router.create_rule(payload, session=session, _=None)
+            result = await alerts_svc.run_detection(session)
+            page = await alerts_svc.list_alerts(session, rule_id="custom-deverrouillage-du-poste")
+            return result, page
+
+    result, page = asyncio.run(create_and_run())
+    assert page.total == 3 and result.alerts_created >= 3  # la règle se déclenche sur les messages réparés

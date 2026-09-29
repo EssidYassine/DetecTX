@@ -14,7 +14,7 @@ from app.clients import get_opensearch
 from app.config import get_settings
 from app.db import SessionLocal
 from app.detection.event_catalog import lookup
-from app.detection.event_narrator import summarize
+from app.detection.event_narrator import fallback_message, summarize
 from app.models.event import Event
 from app.schemas.events import EventOut, EventPage, EventStats, IngestEvent
 
@@ -280,6 +280,36 @@ async def count_events(
     return res["count"]
 
 
+REPAIR_BATCH = 500
+
+
+async def repair_missing_messages() -> int:
+    """Complète le message des événements stockés sans texte (éditeur sans modèle de message,
+    ex. ELAN/Service 14000) à partir de leurs valeurs brutes. Sans message, la recherche et les
+    mots-clés des règles ne les voyaient pas. Idempotent ; seulement dérivé des données stockées.
+    Mode OpenSearch : non géré (l'ingestion récente est déjà complète)."""
+    if not _use_sql():
+        return 0
+    fixed = 0
+    last_id = 0
+    async with SessionLocal() as session:
+        while True:
+            rows = (
+                await session.scalars(
+                    select(Event).where(or_(Event.message.is_(None), Event.message == ""), Event.id > last_id).order_by(Event.id).limit(REPAIR_BATCH)
+                )
+            ).all()
+            if not rows:
+                return fixed
+            for r in rows:
+                text = fallback_message(r.fields, r.provider)
+                if text:
+                    r.message = text
+                    fixed += 1
+            last_id = rows[-1].id
+            await session.commit()
+
+
 # ─────────────────────────────── Helpers ──────────────────────────────────
 def _contains(text: str):
     r"""« Le message contient `text` », littéralement : %, _ et \ ne sont pas des jokers.
@@ -339,7 +369,7 @@ def _row_to_out(r: Event) -> EventOut:
     return EventOut(
         id=str(r.id),
         title=_title(r.channel, r.event_id, r.provider),
-        summary=summarize(r.channel, r.event_id, r.fields, r.message),
+        summary=summarize(r.channel, r.event_id, r.fields, r.message, r.provider),
         timestamp=r.ts,
         channel=r.channel,
         event_id=r.event_id,
@@ -356,7 +386,7 @@ def _src_to_out(hit: dict) -> EventOut:
     return EventOut(
         id=str(hit["_id"]),
         title=_title(s.get("channel"), s.get("event_id"), s.get("provider")),
-        summary=summarize(s.get("channel"), s.get("event_id"), s.get("raw"), s.get("message")),
+        summary=summarize(s.get("channel"), s.get("event_id"), s.get("raw"), s.get("message"), s.get("provider")),
         timestamp=s["@timestamp"],
         channel=s.get("channel", "unknown"),
         event_id=s.get("event_id"),

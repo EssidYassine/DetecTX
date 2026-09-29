@@ -5,6 +5,7 @@ import { searchEvents, type CollectionHealth, type EventPage, type Hunt } from "
 import { channelLabel, fmtDateTime, LIST_WINDOWS, SOURCES, THEMES, type ListWindow } from "@/lib/events-ui";
 import { LevelBadge } from "@/components/ui";
 import { ThemeIcon } from "./theme-icon";
+import { seedFromSearch, type RuleSeed } from "@/lib/rule-seed";
 
 export const PAGE_SIZE = 30;
 
@@ -29,11 +30,13 @@ interface HuntPanelProps {
   selected: string | null;
   onOpen: (id: string) => void;
   refreshKey: number;
+  /** Transforme la recherche courante (journal, ID, texte) en règle de détection. */
+  onCreateRule?: (seed: RuleSeed) => void;
   className?: string;
 }
 
 /** Liste des événements + chasses prêtes à l'emploi. Seule la liste défile. */
-export function HuntPanel({ query, onQuery, hunts, health, selected, onOpen, refreshKey, className = "" }: HuntPanelProps) {
+export function HuntPanel({ query, onQuery, hunts, health, selected, onOpen, refreshKey, onCreateRule, className = "" }: HuntPanelProps) {
   const [text, setText] = useState(query.q);
   const [idText, setIdText] = useState(query.eventId === null ? "" : String(query.eventId));
   const key = JSON.stringify({ query, refreshKey });
@@ -162,6 +165,15 @@ export function HuntPanel({ query, onQuery, hunts, health, selected, onOpen, ref
               ✕
             </button>
           </span>
+        )}
+        {onCreateRule && !query.hunt && !query.theme && (query.channel || query.eventId !== null || query.q) && (
+          <button
+            onClick={() => onCreateRule(seedFromSearch({ channel: query.channel, eventId: query.eventId, q: query.q }))}
+            title="Créer une règle qui alertera sur ce que cette recherche trouve"
+            className="rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-accent transition hover:bg-accent/20"
+          >
+            ◆ En faire une règle
+          </button>
         )}
         {query.slice ? (
           <span className="flex items-center gap-1.5 rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-accent">

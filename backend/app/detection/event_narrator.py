@@ -100,7 +100,36 @@ def _first_line(message: str | None) -> str | None:
     return _shorten(line) if line else None
 
 
-def summarize(channel: str | None, event_id: int | None, fields: dict | None, message: str | None) -> str | None:
+# Changements de session Windows (WTS_SESSION_*) : beaucoup de services les journalisent sans
+# modèle de message (ex. ELAN/Service 14000). Qui a verrouillé / déverrouillé le poste, et quand.
+_SESSION = re.compile(r"\bWTS_(SESSION_(?:LOCK|UNLOCK|LOGON|LOGOFF|REMOTE_CONTROL)|(?:CONSOLE|REMOTE)_(?:CONNECT|DISCONNECT))\b")
+_SESSION_TEXT = {
+    "SESSION_LOCK": "Session verrouillée",
+    "SESSION_UNLOCK": "Session déverrouillée",
+    "SESSION_LOGON": "Ouverture de session",
+    "SESSION_LOGOFF": "Fermeture de session",
+    "SESSION_REMOTE_CONTROL": "Prise de contrôle à distance de la session",
+    "CONSOLE_CONNECT": "Session reprise sur la console",
+    "CONSOLE_DISCONNECT": "Session détachée de la console",
+    "REMOTE_CONNECT": "Connexion distante à la session",
+    "REMOTE_DISCONNECT": "Déconnexion distante de la session",
+}
+
+
+def fallback_message(fields: dict | None, provider: str | None) -> str | None:
+    """Message quand l'éditeur ne fournit pas de modèle de texte (EvtFormatMessage échoue) : comme
+    l'Observateur d'événements, on restitue les valeurs brutes (Data1, Data2…), sans répéter le
+    nom du fournisseur. None s'il n'y a rien à dire."""
+    values = []
+    for key, value in (fields or {}).items():
+        text = " ".join(str(value or "").split())
+        if not key.startswith("Data") or not text or text == provider or text in values:
+            continue
+        values.append(text)
+    return " · ".join(values)[:2000] or None
+
+
+def summarize(channel: str | None, event_id: int | None, fields: dict | None, message: str | None, provider: str | None = None) -> str | None:
     fam = family(channel)
     fields = fields or {}
     if fam == "PowerShell" and event_id in (400, 403, 600):
@@ -119,7 +148,12 @@ def summarize(channel: str | None, event_id: int | None, fields: dict | None, me
         template = _OPTIONAL.sub(lambda m: m.group(1) if all(values[n] for n in _FIELD.findall(m.group(1))) else "", template)
         if all(values[n] for n in _FIELD.findall(template)):
             return _FIELD.sub(lambda m: _shorten(values[m.group(1)], path=m.group(1) in _PATH_FIELDS), template)
-    return _first_line(message)
+    text = message or fallback_message(fields, provider)
+    session = _SESSION.search(text or "")
+    if session:
+        who = f" (signalé par {provider.split('/')[0]})" if provider else ""
+        return _SESSION_TEXT[session.group(1)] + who
+    return _first_line(text)
 
 
 def _value(fields: dict, name: str) -> str:

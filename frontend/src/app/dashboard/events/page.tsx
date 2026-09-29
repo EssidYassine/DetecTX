@@ -23,6 +23,8 @@ import { SidePanel } from "@/components/events/side-panel";
 import { ThemeStrip } from "@/components/events/theme-strip";
 import { HuntPanel, type EventQuery } from "@/components/events/hunt-panel";
 import { EventReader } from "@/components/events/event-reader";
+import { RuleBuilder } from "@/components/events/rule-builder";
+import type { RuleSeed } from "@/lib/rule-seed";
 
 const HEALTH_MS = 15_000; // collecteur intégré : relève toutes les 10 s, agent : 15 s
 const FEED_MS = 15_000;
@@ -67,6 +69,7 @@ function EventsView() {
   const [relief, setRelief] = useState<ReliefSlice | null>(null);
   const urlEvent = sp.get("event");
   const [opened, setOpened] = useState<string | null>(() => (urlEvent && /^[A-Za-z0-9_-]{1,64}$/.test(urlEvent) ? urlEvent : null));
+  const [ruleSeed, setRuleSeed] = useState<RuleSeed | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -128,6 +131,8 @@ function EventsView() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const closeRuleBuilder = useCallback(() => setRuleSeed(null), []);
+
   // Tout changement de filtre ramène à la première page (sauf la pagination elle-même).
   const onQuery = useCallback((patch: Partial<EventQuery>) => {
     if ("slice" in patch && patch.slice === null) setRelief(null);
@@ -184,10 +189,12 @@ function EventsView() {
           selected={opened}
           onOpen={setOpened}
           refreshKey={refreshKey}
+          onCreateRule={setRuleSeed}
           className="h-[32rem] lg:col-span-8 lg:h-auto"
         />
-        <EventReader eventId={opened} onClose={() => setOpened(null)} className="h-[28rem] lg:col-span-4 lg:h-auto" />
+        <EventReader eventId={opened} onClose={() => setOpened(null)} onCreateRule={setRuleSeed} className="h-[28rem] lg:col-span-4 lg:h-auto" />
       </div>
+      <RuleBuilder seed={ruleSeed} onClose={closeRuleBuilder} />
     </>
   );
 }
