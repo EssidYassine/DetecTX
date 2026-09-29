@@ -13,6 +13,7 @@ page où agir. `evaluate()` est pure (testée sans Windows) ; `collect()` rassem
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -309,3 +310,20 @@ async def collect(session: AsyncSession) -> Posture:
         _guard("ressources", asyncio.to_thread(metrics.snapshot)),
     )
     return evaluate(Inputs(now=datetime.now(timezone.utc), cases=page.cases if page else None, exposure=exp, defense=dfn, visibility=vis, host=host))
+
+
+# ─────────────────────────────── cache (barre latérale : la posture complète coûte ~0,6 s)
+CACHE_TTL = 30.0
+_cache: tuple[float, Posture] | None = None
+_cache_lock = asyncio.Lock()
+
+
+async def cached(session: AsyncSession) -> Posture:
+    """Posture mise en cache CACHE_TTL secondes (partagée par toutes les pages)."""
+    global _cache
+    async with _cache_lock:
+        if _cache and time.monotonic() - _cache[0] < CACHE_TTL:
+            return _cache[1]
+        value = await collect(session)
+        _cache = (time.monotonic(), value)
+        return value

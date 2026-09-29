@@ -41,7 +41,7 @@ export default function EventsPage() {
 }
 
 /** Fenêtre « dernières N minutes » (lien depuis le cadran 24 h de l'Overview) -> tranche. */
-function initialQuery(channel: string | null, minutes: number | null): EventQuery {
+function initialQuery(channel: string | null, minutes: number | null, q: string | null = null): EventQuery {
   const valid = minutes !== null && Number.isInteger(minutes) && minutes > 0 && minutes <= 7 * 24 * 60;
   const until = new Date();
   const since = valid ? new Date(until.getTime() - (minutes as number) * 60_000) : null;
@@ -50,7 +50,7 @@ function initialQuery(channel: string | null, minutes: number | null): EventQuer
     channel: channel && SOURCES.some((s) => s.channel === channel) ? channel : "",
     theme: null,
     eventId: null,
-    q: "",
+    q: (q ?? "").trim().slice(0, 200), // lien depuis la palette de commandes (?q=)
     window: "7d",
     slice: since ? { since: since.toISOString(), until: until.toISOString(), label: `Dernières ${minutes} min` } : null,
     page: 0,
@@ -59,7 +59,7 @@ function initialQuery(channel: string | null, minutes: number | null): EventQuer
 
 function EventsView() {
   const sp = useSearchParams();
-  const [query, setQuery] = useState<EventQuery>(() => initialQuery(sp.get("channel"), sp.get("minutes") ? Number(sp.get("minutes")) : null));
+  const [query, setQuery] = useState<EventQuery>(() => initialQuery(sp.get("channel"), sp.get("minutes") ? Number(sp.get("minutes")) : null, sp.get("q")));
   const [period, setPeriod] = useState<PeriodKey>("48h");
   const [histogram, setHistogram] = useState<EventHistogram | null>(null);
   const [health, setHealth] = useState<CollectionHealth | null>(null);

@@ -161,3 +161,22 @@ def test_collect_survit_aux_sources_en_panne(monkeypatch):
     monkeypatch.setattr(alerts_svc, "list_cases", aboom)
     p = asyncio.run(posture.collect(session=None))
     assert p.tone == "unknown" and all(x.score is None for x in p.pillars)
+
+
+def test_posture_cache_evite_les_recalculs(monkeypatch):
+    import asyncio
+
+    calls = []
+
+    async def fake_collect(session):
+        calls.append(1)
+        return evaluate(inputs())
+
+    monkeypatch.setattr(posture, "collect", fake_collect)
+    monkeypatch.setattr(posture, "_cache", None)
+    first = asyncio.run(posture.cached(None))
+    second = asyncio.run(posture.cached(None))
+    assert first is second and len(calls) == 1
+    monkeypatch.setattr(posture, "_cache", (posture.time.monotonic() - posture.CACHE_TTL - 1, first))  # expiré
+    asyncio.run(posture.cached(None))
+    assert len(calls) == 2

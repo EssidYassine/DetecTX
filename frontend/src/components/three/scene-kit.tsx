@@ -54,7 +54,7 @@ function readPalette(): Palette {
 }
 
 /** Relit la palette quand le thème clair/sombre change (attribut data-theme sur <html>). */
-function usePalette(): Palette {
+export function usePalette(): Palette {
   const [palette, setPalette] = useState(readPalette);
   useEffect(() => {
     const obs = new MutationObserver(() => setPalette(readPalette()));
@@ -64,7 +64,7 @@ function usePalette(): Palette {
   return palette;
 }
 
-function usePrefersReducedMotion(): boolean {
+export function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -76,7 +76,7 @@ function usePrefersReducedMotion(): boolean {
 }
 
 /** Vrai si la zone est à l'écran ET l'onglet visible : sinon on coupe la boucle de rendu. */
-function useActive(ref: RefObject<HTMLElement | null>): boolean {
+export function useActive(ref: RefObject<HTMLElement | null>): boolean {
   const [inView, setInView] = useState(true);
   const [visible, setVisible] = useState(() => document.visibilityState === "visible");
   useEffect(() => {

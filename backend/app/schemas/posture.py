@@ -43,3 +43,16 @@ class Posture(BaseModel):
     pillars: list[Pillar]
     priorities: list[Finding]
     generated_at: datetime
+
+
+class NavStats(BaseModel):
+    """Badges vivants de la barre latérale (appel léger, toutes les 30 s)."""
+
+    posture_score: int | None
+    posture_tone: Tone
+    open_alerts: int
+    open_critical: int
+    events_5min: int
+    rules_enabled: int
+    cpu_percent: float | None
+    collection: Literal["ok", "degraded", "down", "unknown"]

@@ -864,6 +864,24 @@ export interface Posture {
   generated_at: string;
 }
 
+/** Badges vivants de la barre latérale (posture en cache 30 s côté serveur). */
+export interface NavStats {
+  posture_score: number | null;
+  posture_tone: PostureTone;
+  open_alerts: number;
+  open_critical: number;
+  events_5min: number;
+  rules_enabled: number;
+  cpu_percent: number | null;
+  collection: "ok" | "degraded" | "down" | "unknown";
+}
+
+export async function fetchNavStats(): Promise<NavStats> {
+  const res = await fetch(`${API_URL}/stats/nav`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as NavStats;
+}
+
 export async function fetchPosture(): Promise<Posture> {
   const res = await fetch(`${API_URL}/stats/posture`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await readError(res));
