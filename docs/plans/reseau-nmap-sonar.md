@@ -179,6 +179,13 @@ Scène : une **coupole de sonar** vue en plongée.
 
 **Contrat Blender ↔ web** (en tête du script et du composant, comme `build_netmap.py` et `network-map.tsx`) : noms des objets ci-dessus, constantes `RING_TRUSTED`, `RING_KNOWN`, `RING_NEW`, `GROUND_TOP`, `SECTORS`.
 
+*Réalisé (étape 4)* ✅ : `assets/3d/build_sonar.py` produit `sonar.glb` (519 Ko, 11 600 triangles) en 14 s. Écarts et précisions par rapport au plan :
+- **5 secteurs** : `computer`, `mobile`, `home` (imprimante, caméra, TV, NAS), `iot`, `unknown`. « Inconnus » est **face à la caméra**, là où un intrus se voit le mieux.
+- **Pas de `Glyph_Router`** : la box est la pièce centrale (`Sonar_Gateway`). Les silhouettes s'appellent `Glyph_<type>` avec **exactement** les types de `classify.KINDS`, d'où aucune table de correspondance côté web. S'y ajoutent `Glyph_Echo` (socle) et `Glyph_Stalk` (mât de hauteur 1, étiré par le web).
+- **Bibliothèque masquée** (`Glyph_Library`) : le web clone les géométries. Les échos de démonstration de l'affiche sont créés **après** l'export : vérifié, aucun objet `Demo_*` dans le `.glb`.
+- **Contrainte pour le web** : un écho ne monte jamais au-dessus de `dome_z(r) − GLYPH_SIZE`. Sinon il traverse la coupole sur l'anneau « nouveau », où elle est basse (constaté au premier rendu).
+- Premier essai à 786 Ko, allégé en réduisant les découpes des anneaux et des lignes de coupole et en supprimant le biseau du boîtier de la box.
+
 ### 4.2 Lecture visuelle (ce qui rend la vue non typique)
 - **Angle** = type d'appareil (secteur) ; position dans le secteur = hachage stable de l'id (pas de saut d'un rafraîchissement à l'autre, comme `network-map.tsx`).
 - **Rayon** = confiance : approuvé au centre, connu au milieu, **nouveau en bord de coupole**. Un intrus se voit donc « à la porte ».
