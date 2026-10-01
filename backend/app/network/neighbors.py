@@ -63,6 +63,7 @@ class Observation:
     interface: Interface
     neighbors: tuple[Neighbor, ...]
     network_names: tuple[str, ...] = ()  # nom(s) Windows du réseau connecté (SSID en Wi-Fi)
+    categories: tuple[str, ...] = ()  # public | private | domain (vide = inconnue)
 
 
 # ─────────────────────────────── adresses MAC (pures)
@@ -187,5 +188,7 @@ def observe() -> Observation | None:
     if read is None:
         return None
     interface, rows = read
-    names = tuple(sorted(n["name"] for n in firewall.connected_networks() if n.get("name")))
-    return Observation(interface=interface, neighbors=lan_neighbors(interface, rows), network_names=names)
+    networks = firewall.connected_networks()
+    names = tuple(sorted(n["name"] for n in networks if n.get("name")))
+    categories = tuple(sorted({n["category"] for n in networks if n.get("category")}))
+    return Observation(interface=interface, neighbors=lan_neighbors(interface, rows), network_names=names, categories=categories)

@@ -58,8 +58,9 @@ Nom de la page : **le Sonar**, dans la lignée de la Ruche (MITRE) et du Tamis (
 | `backend/app/network/neighbors.py` | Lecture de la table ARP (couche passive) |
 | `backend/app/network/classify.py` | **Pure** : type d'appareil (box, PC, téléphone, caméra, imprimante, TV, NAS, IoT, inconnu) |
 | `backend/app/network/oui.py` | Fabricant à partir de la MAC, lu dans `nmap-mac-prefixes` du dossier Nmap (aucune base embarquée) |
-| `backend/app/network/service.py` | Réconciliation avec la référence, alertes, instantané pour l'API, `run_forever()` |
-| `backend/app/services/nmap_helper.py` | Assistant **autonome** lancé via UAC pour le scan complet, sur le modèle de `fw_helper.py` |
+| `backend/app/network/service.py` | Réconciliation avec la référence (passive), alertes appareil et passerelle |
+| `backend/app/network/active.py` | Garde-fou, fusion Nmap + ARP, enrichissement, référence des ports *(ajouté à l'étape 2)* |
+| `backend/app/network/sonar.py` | Boucle : ARP chaque minute, découverte 15 min, ports 6 h ; `status()` pour l'API *(ajouté à l'étape 2)* |
 | `backend/app/routers/network.py` | Routes `/network/*` |
 | `backend/app/schemas/network.py` | Schémas Pydantic |
 
@@ -95,13 +96,22 @@ Comme pour la persistance, le **premier passage constitue la référence**, ce q
 ### 3.5 Profils de scan (aucun argument libre)
 L'utilisateur choisit un **profil**, jamais des options Nmap. La ligne de commande est construite **uniquement** par `target.build_argv(profile, target)` :
 
-| Profil | Arguments | Élévation | Déclenchement |
-|---|---|---|---|
-| `discovery` | `-sn -n --unprivileged -T3 --max-retries 1 --host-timeout 20s -oX -` | non | toutes les 15 min et à la demande |
-| `quick` | `-sT --top-ports 100 -sV --version-light -T3 --host-timeout 60s -oX -` | non | à la demande (un appareil ou le sous-réseau) |
-| `full` | `-sS -sV -O --top-ports 1000 -T3 --host-timeout 120s -oX -` | **UAC** | à la demande, sur **un** appareil |
+Profils réellement implémentés (étape 2, `app/network/target.py`). Tous se terminent par `--noninteractive -oX -` :
 
-`--unprivileged` évite toute dépendance aux droits. La découverte manque alors les appareils silencieux, et la couche ARP passive comble ce trou. Aucun script NSE n'est activé.
+| Profil | Arguments | Durée mesurée (/24) | Déclenchement |
+|---|---|---|---|
+| `discovery` | `-sn -T4 --max-retries 1 --host-timeout 20s` | ≈ 3 s | toutes les 15 min |
+| `discovery-unprivileged` | `-sn --unprivileged …` | ≈ 3 s | repli si Npcap refuse les paquets bruts |
+| `ports` | `-sS --top-ports 100 -T4 --max-retries 1 --host-timeout 60s` | ≈ 13 s | toutes les 6 h |
+| `deep` | `-sS -sV --version-light -O --osscan-limit --top-ports 1000 …` | ≈ 1 min / appareil | à la demande, sur **un** appareil (API, étape 3) |
+
+*Décisions (étape 2), issues des essais sur un vrai réseau :*
+- **Scan SYN, jamais par connexion (`-sT`)**. L'antivirus du poste (Avast) intercepte les connexions sortantes vers les ports mail : en `-sT`, la box montrait 25, 110, 143, 587, 993… « ouverts » (*« Avast! anti-virus proxy, cannot connect »*), et **tous** les appareils l'auraient fait. En SYN, la box montre ses 4 vrais ports.
+- **Pas d'élévation UAC** : Npcap (réglage par défaut) autorise les paquets bruts sans droits administrateur, y compris pour `-sS` et `-O`. L'assistant `nmap_helper.py` est donc **abandonné**, ce qui fait moins de code privilégié. Si Npcap est réservé aux administrateurs, la découverte se replie sur `--unprivileged`, et le scan de ports est **déclaré indisponible** plutôt que faussé.
+- **Résolution des noms conservée** (pas de `-n`) : les noms annoncés par la box (`iPhone.lan`, `Galaxy-A04.lan`…) sont le meilleur indice de type.
+- **Détection de système = indice faible** : la box (OpenWrt) sort « Android 9, 98 % ».
+
+Aucun script NSE n'est activé.
 
 ### 3.6 Sécurité (non négociable)
 1. **Cible** : `ipaddress.ip_network(strict=True)`. Elle doit être **privée** (RFC 1918), **incluse dans un sous-réseau d'une interface locale** (`psutil.net_if_addrs`), avec un préfixe **≥ /22** (1 024 hôtes au plus). Une cible « un appareil » ne peut être qu'un `device_id` **de l'inventaire** : l'API ne reçoit jamais une IP libre. C'est le même principe que les remèdes, qui n'acceptent que des identifiants de l'inventaire.
@@ -111,17 +121,23 @@ L'utilisateur choisit un **profil**, jamais des options Nmap. La ligne de comman
 5. **Concurrence et abus** : un seul scan à la fois (verrou), au plus un scan à la demande par minute et par utilisateur (429), et un délai global par profil.
 6. **RBAC** : `viewer` ne fait que lire ; `analyst` et `admin` lancent des scans et approuvent des appareils.
 7. **Audit** : chaque scan (profil, cible, acteur, résultat), approbation, renommage et nouvelle référence est journalisé.
-8. **Assistant UAC** (`nmap_helper.py`) : il **revalide** la cible lui-même, puisqu'il ne fait pas confiance à son appelant. Il n'accepte que le profil `full` et une IP privée unique du sous-réseau local, et écrit le XML dans un fichier temporaire au nom imposé. Codes de sortie documentés, comme `fw_helper.py`.
+8. ~~**Assistant UAC** (`nmap_helper.py`)~~ : abandonné à l'étape 2, l'élévation n'est pas nécessaire (voir 3.5).
+9. **Catégorie inconnue = refus** : si Windows ne donne pas la catégorie du réseau, la couche active est suspendue par prudence.
 
 ### 3.7 Détections (le cœur « puissant et non typique »)
 | `rule_id` | Déclencheur | Sévérité | MITRE |
 |---|---|---|---|
 | `network-gateway-mac-change` ✅ | La MAC de la **passerelle** change. Si cette MAC est aussi celle d'un autre appareil, l'alerte le nomme : c'est la signature de l'homme du milieu | **critique** si le réseau est nommé, élevée sinon | T1557.002 (ARP Cache Poisoning) |
-| `network-new-device` ✅ | MAC jamais vue (après la référence) | moyenne ; faible si MAC privée ; élevée si elle expose un port à risque (étape 2) | T1200 (Hardware Additions) |
+| `network-new-device` ✅ | MAC jamais vue (après la référence et l'apprentissage) | moyenne ; faible si MAC privée | T1200 (Hardware Additions) |
+| `network-new-port` ✅ | Port ouvert absent de la référence de l'appareil | selon `port_risk` | selon `port_risk` (T1021, T1190…) |
+| `network-risky-service` ✅ | Au **premier** scan d'un appareil, service à risque élevé ou critique exposé (Telnet, SMB, RDP, base de données…) | selon `port_risk` | selon `port_risk` |
 
 *Décision (étape 1)* : la règle `network-arp-conflict` prévue au départ est **fusionnée** dans `network-gateway-mac-change`. Pour les IP autres que la passerelle, « une IP connue répond avec une autre MAC » arrive à chaque renouvellement de bail DHCP : ce serait une source de faux positifs permanente.
-| `network-new-port` | Nouveau port ouvert sur un appareil connu | selon `port_risk` | selon `port_risk` (T1021, T1133…) |
-| `network-risky-service` | Service à risque exposé : Telnet, SMB, RDP, base de données, interface d'administration en HTTP | selon `port_risk` | selon `port_risk` |
+
+*Décisions (étape 2)* :
+- **Période d'apprentissage** (`NETWORK_LEARNING_HOURS`, 24 h) : la table ARP ne montre que les appareils qui ont parlé au poste, et le reste du foyer y apparaît au fil des heures. Sans apprentissage, la première journée produirait une alerte par téléphone du foyer (constaté : 4 fausses alertes le premier soir). La passerelle reste contrôlée dès la première minute. Le compromis est assumé : un intrus arrivé pendant ces 24 h rejoint la référence, mais reste visible dans l'inventaire.
+- **La première découverte Nmap élargit la référence**, sans alerte « nouvel appareil », pour la même raison.
+- **Un port refermé puis rouvert n'est pas une nouveauté** (le port reste dans la référence de l'appareil).
 
 Les finesses qui font la qualité et réduisent les faux positifs :
 - **MAC aléatoire** (bit « administré localement ») : l'appareil est étiqueté « téléphone ou tablette, adresse privée ». Un téléphone qui change de MAC à chaque reconnexion ne doit pas déclencher une alerte « nouvel appareil » à chaque fois. On le rapproche par nom d'hôte quand c'est possible, sinon l'alerte est de sévérité faible.

@@ -15,5 +15,7 @@ httpx==0.28.1
 PyYAML==6.0.2
 aiosqlite==0.20.0
 psutil==7.2.2
+# Lecture du XML de Nmap sans risque d'entités piégées (XXE, « billion laughs »).
+defusedxml==0.7.1
 # API Windows (pare-feu, services, fenêtres) : sans objet hors Windows.
 pywin32==312; sys_platform == "win32"

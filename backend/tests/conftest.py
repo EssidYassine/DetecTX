@@ -11,3 +11,5 @@ os.environ.setdefault("LOCAL_COLLECTOR", "false")  # les tests ne lisent pas les
 os.environ.setdefault("INTEL_FEEDS", "false")  # aucun téléchargement pendant les tests
 os.environ.setdefault("PERSISTENCE_WATCH", "false")  # pas de balayage du poste en tâche de fond
 os.environ.setdefault("NETWORK_WATCH", "false")  # pas de lecture de la table ARP du poste
+os.environ.setdefault("NETWORK_ACTIVE_SCAN", "false")  # aucun scan Nmap pendant les tests
+os.environ.setdefault("NETWORK_LEARNING_HOURS", "0")  # apprentissage testé à part (test_network.py)

@@ -1,4 +1,4 @@
-"""Sonar, couche passive : référence du réseau local et détections (toutes les 60 s).
+"""Sonar : référence du réseau local et détections d'appareils (la boucle est dans sonar.py).
 
 Deux détections :
   network-gateway-mac-change  l'IP de la passerelle répond avec une autre MAC que sa référence :
@@ -8,7 +8,10 @@ Deux détections :
                               Faible si la MAC est privée (téléphone qui se reconnecte), moyenne sinon.
 
 Ce qui n'alerte PAS, volontairement :
-  - le premier passage sur un réseau (il fixe la référence) ;
+  - le premier passage sur un réseau (il fixe la référence), puis la période d'APPRENTISSAGE
+    (NETWORK_LEARNING_HOURS, 24 h) : la table ARP ne montre que les appareils qui ont parlé au
+    poste, le reste du foyer y apparaît au fil des heures. La passerelle, elle, est contrôlée
+    dès la première minute ;
   - un appareil qui change d'IP (bail DHCP) ou qui revient après une absence ;
   - un autre réseau qui utilise la même IP de passerelle (la clé inclut le nom du réseau).
 
@@ -18,24 +21,24 @@ que par `reconcile()`.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
 from app import notify
+from app.config import get_settings
 from app.db import SessionLocal
 from app.models.network import NetDevice, NetNetwork
-from app.network import classify, neighbors
+from app.network import classify
 from app.network.neighbors import Neighbor, Observation
 from app.services.alerts import save_alerts
 
 log = logging.getLogger("detectx.network")
+settings = get_settings()
 
-SCAN_EVERY_S = 60
 CHANNEL = "DeTecTX/Réseau"
 _SCORE = {"critical": 90, "high": 70, "medium": 45, "low": 20}  # mêmes paliers que le moteur
 
@@ -61,7 +64,7 @@ def _gateway(obs: Observation) -> Neighbor | None:
     return next((n for n in obs.neighbors if n.is_gateway), None)
 
 
-def _candidate(key: str, rule: str, title: str, severity: str, mitre: str, message: str, now: datetime) -> dict:
+def alert_candidate(key: str, rule: str, title: str, severity: str, mitre: str, message: str, now: datetime) -> dict:
     return {
         "dedup_key": key[:255],
         "rule_id": rule,
@@ -104,7 +107,7 @@ def assess(obs: Observation, known: Known | None, key: str, now: datetime) -> li
             "puis approuver la nouvelle MAC seulement si la box a été remplacée."
         )
         out.append(
-            _candidate(
+            alert_candidate(
                 f"net-gw:{key}:{gw.mac}",
                 "network-gateway-mac-change",
                 f"Passerelle usurpée ? La box {gw.ip} répond avec une autre adresse MAC",
@@ -120,7 +123,7 @@ def assess(obs: Observation, known: Known | None, key: str, now: datetime) -> li
             continue  # la passerelle est couverte par la règle ci-dessus
         private = " (adresse MAC privée : souvent un téléphone ou une tablette)" if n.randomized else ""
         out.append(
-            _candidate(
+            alert_candidate(
                 f"net-new:{key}:{n.mac}",
                 "network-new-device",
                 f"Nouvel appareil sur {where} : {n.ip}",
@@ -138,8 +141,27 @@ def assess(obs: Observation, known: Known | None, key: str, now: datetime) -> li
     return out
 
 
-async def reconcile(obs: Observation, *, now: datetime | None = None) -> list[dict]:
-    """Rapproche l'observation de la référence du réseau, l'enregistre, lève et notifie les alertes."""
+async def raise_alerts(candidates: list[dict]) -> list[dict]:
+    """Enregistre les candidats (dédupliqués) et notifie les alertes créées."""
+    if not candidates:
+        return []
+    async with SessionLocal() as session:
+        created = await save_alerts(session, candidates)
+    if created and notify.enabled():
+        try:
+            await notify.notify_alerts(created)
+        except Exception:
+            log.warning("notification des alertes réseau impossible", exc_info=True)
+    return created
+
+
+async def reconcile(obs: Observation, *, now: datetime | None = None, extend_baseline: bool = False) -> list[dict]:
+    """Rapproche l'observation de la référence du réseau, l'enregistre, lève et notifie les alertes.
+
+    extend_baseline : 1re découverte ACTIVE d'un réseau déjà connu par la couche passive. Nmap voit
+    d'un coup des appareils présents depuis toujours, mais silencieux pour la table ARP : ils
+    rejoignent la référence sans alerte « nouvel appareil ». Le contrôle de la passerelle reste actif.
+    """
     now = now or datetime.now(timezone.utc)
     key = network_key(obs)
     gw = _gateway(obs)
@@ -147,7 +169,13 @@ async def reconcile(obs: Observation, *, now: datetime | None = None) -> list[di
         net = await session.get(NetNetwork, key)
         devices = {d.mac: d for d in (await session.scalars(select(NetDevice).where(NetDevice.network_key == key))).all()}
         known = None if net is None else Known(gateway_mac=net.gateway_mac, macs=frozenset(devices))
+        hours = settings.network_learning_hours
+        learning = net is not None and hours > 0 and now < net.first_seen + timedelta(hours=hours)
+        absorb = known is not None and (extend_baseline or learning)
+        if absorb:
+            known = Known(gateway_mac=known.gateway_mac, macs=known.macs | {n.mac for n in obs.neighbors if not n.is_gateway})
         candidates = assess(obs, known, key, now)
+        new_status = "baseline" if known is None or absorb else "new"
 
         if net is None:
             net = NetNetwork(key=key, name=" + ".join(obs.network_names)[:255] or None, subnet=obs.interface.network, gateway_ip=obs.interface.gateway, first_seen=now, last_seen=now)
@@ -168,7 +196,7 @@ async def reconcile(obs: Observation, *, now: datetime | None = None) -> list[di
                     kind=classify.kind(is_gateway=n.mac == net.gateway_mac, randomized=n.randomized),
                     randomized=n.randomized,
                     is_gateway=n.is_gateway,
-                    status="baseline" if known is None else "new",
+                    status=new_status,
                     first_seen=now,
                     last_seen=now,
                 )
@@ -182,33 +210,8 @@ async def reconcile(obs: Observation, *, now: datetime | None = None) -> list[di
                 device.is_gateway = device.mac == gw.mac
             if device.mac == net.gateway_mac:
                 device.kind = "gateway"  # passerelle adoptée après le premier passage
+        if extend_baseline:
+            net.active_baseline_at = now
         await session.commit()
 
-    created: list[dict] = []
-    if candidates:
-        async with SessionLocal() as session:
-            created = await save_alerts(session, candidates)
-        if created and notify.enabled():
-            try:
-                await notify.notify_alerts(created)
-            except Exception:
-                log.warning("notification des alertes réseau impossible", exc_info=True)
-    return created
-
-
-async def scan_once() -> list[dict]:
-    obs = await asyncio.to_thread(neighbors.observe)
-    if obs is None:
-        return []  # hors ligne, ou hors Windows
-    return await reconcile(obs)
-
-
-async def run_forever() -> None:
-    """Surveillance passive continue : la table ARP est relue toutes les minutes."""
-    await asyncio.sleep(15)
-    while True:
-        try:
-            await scan_once()
-        except Exception:
-            log.exception("surveillance du réseau local")
-        await asyncio.sleep(SCAN_EVERY_S)
+    return await raise_alerts(candidates)

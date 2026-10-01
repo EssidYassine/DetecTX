@@ -36,7 +36,7 @@ from app.routers import (
     system_control,
     threatintel,
 )
-from app.network import service as network
+from app.network import sonar
 from app.services import attack, persistence, winlog_collector
 from app.threatintel import feeds, vulns
 from app.services.events import ensure_events_index, repair_missing_messages
@@ -54,6 +54,15 @@ _LATE_COLUMNS = {
         "resolution": "VARCHAR(20)",
         "triaged_by": "VARCHAR(255)",
         "triaged_at": "TIMESTAMP",
+    },
+    "net_networks": {
+        "active_baseline_at": "TIMESTAMP",
+    },
+    "net_devices": {
+        "vendor": "VARCHAR(120)",
+        "hostname": "VARCHAR(255)",
+        "os_guess": "VARCHAR(120)",
+        "ports_scanned_at": "TIMESTAMP",
     },
 }
 
@@ -103,12 +112,12 @@ async def lifespan(app: FastAPI):
     # Threat Intel : listes publiques (au démarrage puis toutes les 12 h) et vulnérabilités du poste.
     intel = [asyncio.create_task(feeds.run_forever()), asyncio.create_task(vulns.run_forever())] if settings.intel_feeds else []
     watch = asyncio.create_task(persistence.run_forever()) if settings.persistence_watch else None
-    sonar = asyncio.create_task(network.run_forever()) if settings.network_watch else None
+    network = asyncio.create_task(sonar.run_forever()) if settings.network_watch else None
     yield
     warmup.cancel()
     for task in intel:
         task.cancel()
-    for task in (watch, sonar):
+    for task in (watch, network):
         if task is not None:
             task.cancel()
     if collector is not None:

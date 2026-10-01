@@ -226,3 +226,25 @@ def test_reconciliation_retour_apres_absence(monkeypatch):
         return await service.reconcile(HOME, now=NOW + timedelta(hours=2))  # il revient
 
     assert _with_db(monkeypatch, scenario) == []
+
+
+def test_apprentissage_absorbe_le_foyer_mais_surveille_la_box(monkeypatch):
+    """Pendant l'apprentissage, le foyer qui apparaît peu à peu rejoint la référence ; la box est contrôlée."""
+    monkeypatch.setattr(service.settings, "network_learning_hours", 24)
+    phone = ("192.168.1.43", PHONE)
+    intruder = ("192.168.1.66", "3c:22:fb:00:00:09")
+
+    async def scenario(maker):
+        await service.reconcile(HOME, now=NOW)
+        learning = await service.reconcile(_obs(("192.168.1.1", BOX), ("192.168.1.151", LAPTOP), phone), now=NOW + timedelta(hours=3))
+        spoof = await service.reconcile(_obs(("192.168.1.1", ATTACKER), ("192.168.1.151", LAPTOP)), now=NOW + timedelta(hours=4))
+        after = await service.reconcile(_obs(("192.168.1.1", BOX), ("192.168.1.151", LAPTOP), intruder), now=NOW + timedelta(hours=25))
+        async with maker() as session:
+            status = {d.mac: d.status for d in (await session.scalars(select(NetDevice))).all()}
+        return learning, spoof, after, status
+
+    learning, spoof, after, status = _with_db(monkeypatch, scenario)
+    assert learning == [] and status[PHONE] == "baseline"
+    assert [a["rule_id"] for a in spoof] == ["network-gateway-mac-change"]  # dès l'apprentissage
+    assert [a["rule_id"] for a in after] == ["network-new-device"]  # fin de l'apprentissage
+    assert status["3c:22:fb:00:00:09"] == "new"

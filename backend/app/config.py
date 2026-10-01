@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     persistence_watch: bool = Field(default=True, validation_alias="PERSISTENCE_WATCH")
     # Sonar, couche passive : table ARP relue toutes les minutes (nouvel appareil, passerelle usurpée).
     network_watch: bool = Field(default=True, validation_alias="NETWORK_WATCH")
+    # Apprentissage : pendant ce délai après la 1re visite d'un réseau, les appareils qui apparaissent
+    # rejoignent la référence sans alerte (la table ARP ne montre pas tout le foyer d'un coup).
+    network_learning_hours: int = Field(default=24, ge=0, le=720, validation_alias="NETWORK_LEARNING_HOURS")
+    # Sonar, couche active (Nmap) : découverte du sous-réseau local et scan SYN des ports courants.
+    # Jamais sur un réseau classé Public par Windows. NMAP_PATH vide = emplacements standards.
+    network_active_scan: bool = Field(default=True, validation_alias="NETWORK_ACTIVE_SCAN")
+    nmap_path: str = Field(default="", validation_alias="NMAP_PATH")
+    network_discovery_minutes: int = Field(default=15, ge=5, le=1440, validation_alias="NETWORK_DISCOVERY_MINUTES")
+    network_ports_hours: int = Field(default=6, ge=0, le=168, validation_alias="NETWORK_PORTS_HOURS")  # 0 = jamais seul
 
     # PostgreSQL
     postgres_user: str = "detectx"

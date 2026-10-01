@@ -11,7 +11,7 @@ appareils présents sont « connus », seuls ceux qui arrivent ensuite sont « n
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, String, func
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, UTCDateTime
@@ -25,6 +25,7 @@ class NetNetwork(Base):
     subnet: Mapped[str] = mapped_column(String(64), nullable=False)
     gateway_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     gateway_mac: Mapped[str | None] = mapped_column(String(17), nullable=True)  # référence
+    active_baseline_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)  # 1re découverte Nmap
     first_seen: Mapped[datetime] = mapped_column(UTCDateTime(), server_default=func.now(), nullable=False)
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime(), server_default=func.now(), nullable=False)
 
@@ -43,3 +44,40 @@ class NetDevice(Base):
     status: Mapped[str] = mapped_column(String(20), default="baseline", nullable=False)  # baseline|new|approved
     first_seen: Mapped[datetime] = mapped_column(UTCDateTime(), server_default=func.now(), nullable=False)
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime(), server_default=func.now(), nullable=False)
+    # Couche active (Nmap) : vides tant qu'aucun scan n'a vu l'appareil.
+    vendor: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    os_guess: Mapped[str | None] = mapped_column(String(120), nullable=True)  # indice faible (« Android 9, 98 % »)
+    ports_scanned_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)  # 1er scan = référence des ports
+
+
+class NetPort(Base):
+    """Port ouvert vu par Nmap. Un port refermé est GARDÉ (last_seen fige) : sa réouverture n'est pas une nouveauté."""
+
+    __tablename__ = "net_ports"
+
+    device_id: Mapped[str] = mapped_column(String(64), ForeignKey("net_devices.id"), primary_key=True)
+    proto: Mapped[str] = mapped_column(String(3), primary_key=True)  # tcp|udp
+    port: Mapped[int] = mapped_column(Integer, primary_key=True)
+    service: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    product: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    version: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="baseline", nullable=False)  # baseline|new
+    first_seen: Mapped[datetime] = mapped_column(UTCDateTime(), server_default=func.now(), nullable=False)
+    last_seen: Mapped[datetime] = mapped_column(UTCDateTime(), server_default=func.now(), nullable=False)
+
+
+class NetScan(Base):
+    """Trace de chaque scan Nmap (traçabilité : quoi, sur quoi, par qui, avec quel résultat)."""
+
+    __tablename__ = "net_scans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile: Mapped[str] = mapped_column(String(20), nullable=False)
+    target: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)  # « système » pour les scans planifiés
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    hosts_up: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    ok: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
