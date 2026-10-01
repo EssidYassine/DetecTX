@@ -10,3 +10,4 @@ os.environ.setdefault("AUDIT_LOG_PATH", "")  # audit en console seulement : les 
 os.environ.setdefault("LOCAL_COLLECTOR", "false")  # les tests ne lisent pas les journaux du poste
 os.environ.setdefault("INTEL_FEEDS", "false")  # aucun téléchargement pendant les tests
 os.environ.setdefault("PERSISTENCE_WATCH", "false")  # pas de balayage du poste en tâche de fond
+os.environ.setdefault("NETWORK_WATCH", "false")  # pas de lecture de la table ARP du poste

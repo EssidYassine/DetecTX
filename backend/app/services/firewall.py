@@ -276,23 +276,44 @@ def _collect() -> FwState:
         state.default_block[bit] = int(fw.DefaultInboundAction(bit)) == 0
         state.block_all[bit] = bool(fw.BlockAllInboundTraffic(bit))
     state.rules = [rule for r in fw.Rules if (rule := _rule_from_com(r)) is not None]
-    try:
-        nlm = win32com.client.Dispatch("{DCB00C01-570F-4A9B-8D69-199FDBA5723B}")
-        category = {0: "public", 1: "private", 2: "domain"}
-        state.networks = [{"name": n.GetName(), "category": category.get(int(n.GetCategory()), "public")} for n in nlm.GetNetworks(1)]
-    except Exception:  # noqa: BLE001 - le nom du réseau est un plus, pas une nécessité
-        state.networks = []
+    state.networks = _networks_com()
     return state
 
 
-def _read_windows() -> FwState:
+def _networks_com() -> list[dict]:
+    """Réseaux connectés et leur catégorie (INetworkListManager). COM déjà initialisé."""
+    import win32com.client
+
+    try:
+        nlm = win32com.client.Dispatch("{DCB00C01-570F-4A9B-8D69-199FDBA5723B}")
+        category = {0: "public", 1: "private", 2: "domain"}
+        return [{"name": n.GetName(), "category": category.get(int(n.GetCategory()), "public")} for n in nlm.GetNetworks(1)]
+    except Exception:  # noqa: BLE001 - le nom du réseau est un plus, pas une nécessité
+        return []
+
+
+def _with_com(read):
     import pythoncom
 
     pythoncom.CoInitialize()  # chaque thread du pool FastAPI a son propre appartement COM
     try:
-        return _collect()
+        return read()
     finally:
         pythoncom.CoUninitialize()
+
+
+def _read_windows() -> FwState:
+    return _with_com(_collect)
+
+
+def connected_networks() -> list[dict]:
+    """Réseaux connectés seuls (sans relire les règles du pare-feu) : [{name, category}]."""
+    if sys.platform != "win32":
+        return []
+    try:
+        return _with_com(_networks_com)
+    except ImportError:
+        return []
 
 
 def _services_by_pid() -> dict[int, set[str]]:

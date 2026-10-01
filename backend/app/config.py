@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     # Surveillance de la persistance (clés Run, tâches, services…) toutes les 5 min : une entrée
     # nouvelle ou modifiée, non signée Microsoft, lève une alerte.
     persistence_watch: bool = Field(default=True, validation_alias="PERSISTENCE_WATCH")
+    # Sonar, couche passive : table ARP relue toutes les minutes (nouvel appareil, passerelle usurpée).
+    network_watch: bool = Field(default=True, validation_alias="NETWORK_WATCH")
 
     # PostgreSQL
     postgres_user: str = "detectx"
