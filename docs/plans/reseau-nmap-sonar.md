@@ -207,7 +207,10 @@ Scène : une **coupole de sonar** vue en plongée.
 | `frontend/src/components/network/scan-bar.tsx` | État de Nmap, catégorie du réseau, dernier scan, bouton de scan |
 | `frontend/src/lib/network.ts` | Types et placement pur (angle, rayon, hauteur), testable |
 | `frontend/src/lib/api.ts` | Appels `/network/*` |
-| `frontend/src/components/nav/sidebar.tsx` | Entrée « Réseau » dans « Surveiller », après « Système », avec badge du nombre de nouveaux appareils |
+| `frontend/src/components/nav/sidebar.tsx` | Entrée **« Réseau local »** dans « Surveiller », après « Système », avec badge du nombre de nouveaux appareils |
+| `frontend/src/app/dashboard/machines/page.tsx` | Onglet « Réseau » renommé **« Connexions »** : il montre à qui parle CE poste, à ne pas confondre avec le réseau local |
+
+*Décision (2026-10-02, validée par l'utilisateur)* : page dédiée plutôt qu'un 7ᵉ onglet de Système. Système parle de **ce poste**, le Sonar de **ce qui l'entoure**. La page a besoin de place (3D, liste, fiche), et seule une entrée de la barre latérale porte un badge, ce qui compte pour repérer un intrus. Nom affiché : « Réseau local » (le nom de code « Sonar » reste dans le code et la vue 3D).
 
 États vides soignés, parce qu'ils font la facilité d'utilisation :
 - **Nmap absent** : « Mode passif : DeTecTX voit les appareils qui ont parlé à ce PC. Pour un inventaire complet, installez Nmap (avec Npcap) depuis nmap.org, puis rafraîchissez. » Pas de téléchargement automatique.

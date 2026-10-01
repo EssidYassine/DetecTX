@@ -13,7 +13,7 @@ const Emblem = dynamic(() => import("@/components/three/emblem"), {
   loading: () => <img src="/models/emblem_poster.png" alt="" className="h-full w-full object-contain" />,
 });
 
-type BadgeKey = "home" | "system" | "logs" | "alerts" | "rules";
+type BadgeKey = "home" | "system" | "network" | "logs" | "alerts" | "rules";
 
 interface NavItem {
   label: string;
@@ -28,6 +28,7 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
     items: [
       { label: "Accueil", href: "/dashboard", icon: "home", badge: "home" },
       { label: "Système", href: "/dashboard/machines", icon: "system", badge: "system" },
+      { label: "Réseau local", href: "/dashboard/network", icon: "network", badge: "network" },
       { label: "Journaux", href: "/dashboard/events", icon: "logs", badge: "logs" },
     ],
   },
@@ -69,6 +70,9 @@ function badgeFor(key: BadgeKey | undefined, nav: NavStats | null): { text: stri
       if (cpu === null) return null;
       return { text: `${Math.round(cpu)}%`, tone: cpu >= 85 ? "critical" : cpu >= 60 ? "warn" : "muted", title: `Processeur ${Math.round(cpu)} %` };
     }
+    case "network":
+      if (nav.network_spoofed) return { text: "!", tone: "critical", title: "Un appareil répond à la place de votre box" };
+      return nav.network_new ? { text: String(nav.network_new), tone: "warn", title: `${nav.network_new} nouvel(s) appareil(s) sur votre réseau` } : null;
     case "rules":
       return nav.rules_enabled ? { text: String(nav.rules_enabled), tone: "muted", title: `${nav.rules_enabled} règle(s) personnalisée(s) active(s)` } : null;
   }

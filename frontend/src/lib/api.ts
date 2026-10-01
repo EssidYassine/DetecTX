@@ -887,6 +887,10 @@ export interface NavStats {
   rules_enabled: number;
   cpu_percent: number | null;
   collection: "ok" | "degraded" | "down" | "unknown";
+  /** Appareils nouveaux sur le dernier réseau local observé (Sonar). */
+  network_new: number;
+  /** Appareils qui répondent pour la box sans être la box de référence (usurpation ARP). */
+  network_spoofed: number;
 }
 
 export async function fetchNavStats(): Promise<NavStats> {
@@ -1270,3 +1274,115 @@ export const fetchHardening = () => metricsCall<HardeningSnapshot>("/hardening")
 export const fetchRemedies = () => metricsCall<{ catalog: Record<string, RemedyMeta>; history: RemedyRecord[] }>("/remedies");
 export const applyRemedy = (fix: string) => metricsCall<RemedyResult>(`/remedies/${encodeURIComponent(fix)}`, { method: "POST" });
 export const revertRemedy = (recordId: string) => metricsCall<{ ok: boolean; detail: string }>(`/remedies/history/${encodeURIComponent(recordId)}/revert`, { method: "POST" });
+
+// ─────────────────────────────── Réseau local (Sonar)
+export type DeviceKind = "gateway" | "computer" | "mobile" | "printer" | "camera" | "media" | "nas" | "iot" | "unknown";
+// Niveaux de risque d'un port : même échelle que l'exposition du poste (RiskLevel, plus haut).
+export type ScanProfile = "discovery" | "ports" | "deep";
+
+export interface NetPortView {
+  proto: "tcp" | "udp";
+  port: number;
+  service: string;
+  product: string | null;
+  version: string | null;
+  /** Vu ouvert au dernier scan de ports de l'appareil (un port refermé reste dans la référence). */
+  open: boolean;
+  status: "baseline" | "new";
+  risk: { level: RiskLevel; why: string; attack: string };
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface NetDevice {
+  id: string;
+  ip: string;
+  mac: string;
+  label: string | null;
+  hostname: string | null;
+  vendor: string | null;
+  os_guess: string | null;
+  kind: DeviceKind;
+  kind_label: string;
+  randomized_mac: boolean;
+  status: "baseline" | "new" | "approved";
+  /** La box de référence du réseau. */
+  is_gateway: boolean;
+  /** Répond en ce moment pour l'IP de la passerelle. */
+  answers_as_gateway: boolean;
+  /** Répond pour la passerelle SANS être la box de référence : usurpation probable. */
+  gateway_mismatch: boolean;
+  risk: RiskLevel;
+  open_ports: number;
+  ports: NetPortView[];
+  first_seen: string;
+  last_seen: string;
+  ports_scanned_at: string | null;
+}
+
+export interface NetNetworkInfo {
+  key: string;
+  name: string | null;
+  subnet: string;
+  gateway_ip: string | null;
+  gateway_mac: string | null;
+  first_seen: string;
+  learning_until: string | null;
+  active_baseline_at: string | null;
+}
+
+export interface NetInventory {
+  network: NetNetworkInfo | null;
+  devices: NetDevice[];
+}
+
+export interface NetScanRecord {
+  id: number;
+  profile: string;
+  target: string;
+  actor: string;
+  started_at: string;
+  finished_at: string | null;
+  hosts_up: number;
+  ok: boolean;
+  error: string | null;
+}
+
+export interface NetRunning {
+  profile: ScanProfile;
+  target: string;
+  actor: string;
+  started_at: string | null;
+}
+
+export interface NetStatus {
+  online: boolean;
+  network: { key: string; name: string; subnet: string; gateway: string | null; local_ip: string; categories: string[] } | null;
+  nmap_installed: boolean;
+  /** null : pas encore essayé ; false : Npcap réservé aux administrateurs. */
+  raw_packets: boolean | null;
+  /** Raison pour laquelle les scans actifs sont refusés (réseau Public, Nmap absent…), sinon null. */
+  active_blocked: string | null;
+  error: string | null;
+  running: NetRunning | null;
+  last_discovery: string | null;
+  last_ports: string | null;
+  schedule: { passive_s: number; discovery_min: number; ports_h: number };
+  scans: NetScanRecord[];
+}
+
+async function networkCall<T>(path: string, init?: { method: "POST" | "PATCH"; body?: unknown }): Promise<T> {
+  const headers: HeadersInit = init?.body !== undefined ? { ...authHeaders(), "Content-Type": "application/json" } : authHeaders();
+  const res = await fetch(`${API_URL}/network${path}`, { method: init?.method ?? "GET", headers, body: init?.body !== undefined ? JSON.stringify(init.body) : undefined });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as T;
+}
+
+export const fetchNetworkStatus = () => networkCall<NetStatus>("/status");
+export const fetchNetworkDevices = () => networkCall<NetInventory>("/devices");
+export const updateNetworkDevice = (id: string, change: { label?: string | null; approve?: boolean }) =>
+  networkCall<NetDevice>(`/devices/${encodeURIComponent(id)}`, { method: "PATCH", body: change });
+export const startNetworkScan = (profile: ScanProfile, deviceId?: string) =>
+  networkCall<NetRunning>("/scan", { method: "POST", body: deviceId ? { profile, device_id: deviceId } : { profile } });
+export const acceptNetworkGateway = (deviceId: string) => networkCall<NetDevice>("/gateway/accept", { method: "POST", body: { device_id: deviceId } });
+export const resetNetworkBaseline = () => networkCall<NetInventory>("/baseline", { method: "POST" });

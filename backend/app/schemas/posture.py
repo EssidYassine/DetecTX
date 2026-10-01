@@ -56,3 +56,5 @@ class NavStats(BaseModel):
     rules_enabled: int
     cpu_percent: float | None
     collection: Literal["ok", "degraded", "down", "unknown"]
+    network_new: int = 0  # appareils nouveaux sur le dernier réseau observé
+    network_spoofed: int = 0  # appareils qui répondent pour la box sans être la box de référence

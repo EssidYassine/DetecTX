@@ -294,3 +294,9 @@ def test_nouvelle_reference(db, current):
     res = _client(Role.admin).post("/network/baseline")
     assert res.status_code == 200
     assert {d["status"] for d in res.json()["devices"]} == {"baseline"}  # réappris à partir de l'observation courante
+
+
+def test_compteurs_du_badge(db, current):
+    assert asyncio.run(inventory.nav_counts()) == (0, 0)  # référence : rien de nouveau
+    asyncio.run(service.reconcile(_obs(("192.168.1.1", ATTACKER), ("192.168.1.151", PC), ("192.168.1.40", "98:59:7a:00:00:40"))))
+    assert asyncio.run(inventory.nav_counts()) == (2, 1)  # l'usurpateur et le nouveau PC ; 1 usurpation

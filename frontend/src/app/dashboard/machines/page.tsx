@@ -56,7 +56,7 @@ const CITY_SIZE = 60; // = MAX_BUILDINGS de la ville 3D
 
 const VIEWS = [
   { key: "ressources", label: "Ressources" },
-  { key: "reseau", label: "Réseau" },
+  { key: "reseau", label: "Connexions" }, // à qui parle CE poste (≠ page Réseau local) ; clé gardée pour les liens « ?vue=reseau »
   { key: "processus", label: "Processus & activité" },
   { key: "ports", label: "Ports & pare-feu" },
   { key: "persistance", label: "Persistance" },

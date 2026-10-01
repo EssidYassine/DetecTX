@@ -168,6 +168,19 @@ async def reset(key: str) -> bool:
     return True
 
 
+async def nav_counts() -> tuple[int, int]:
+    """(nouveaux appareils, usurpations de la box) sur le dernier réseau observé : badge de la barre
+    latérale. Lecture en base seulement (pas de table ARP ni de COM toutes les 30 s)."""
+    async with SessionLocal() as session:
+        net = await session.scalar(select(NetNetwork).order_by(NetNetwork.last_seen.desc()).limit(1))
+        if net is None:
+            return 0, 0
+        rows = (await session.scalars(select(NetDevice).where(NetDevice.network_key == net.key))).all()
+    new = sum(1 for d in rows if d.status == "new")
+    spoofed = sum(1 for d in rows if d.is_gateway and net.gateway_mac is not None and d.mac != net.gateway_mac)
+    return new, spoofed
+
+
 async def scans(limit: int = 20) -> list[dict]:
     async with SessionLocal() as session:
         rows = (await session.scalars(select(NetScan).order_by(NetScan.id.desc()).limit(limit))).all()

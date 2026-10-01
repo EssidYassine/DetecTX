@@ -10,6 +10,7 @@ from app.deps import get_current_user
 from app.models.alert import Alert
 from app.models.rule import CustomRule
 from app.models.user import User
+from app.network import inventory as network_inventory
 from app.schemas.posture import NavStats, Posture
 from app.schemas.stats import OverviewStats
 from app.services import events as events_svc
@@ -56,6 +57,7 @@ async def nav_stats(
     except Exception:  # noqa: BLE001 - OpenSearch indisponible : le badge se tait, la barre reste utilisable
         events_5min = 0
     visibility = next((x.tone for x in p.pillars if x.key == "visibility"), "unknown")
+    network_new, network_spoofed = await network_inventory.nav_counts()
     return NavStats(
         posture_score=p.score,
         posture_tone=p.tone,
@@ -65,4 +67,6 @@ async def nav_stats(
         rules_enabled=rules_enabled,
         cpu_percent=psutil.cpu_percent(interval=None),
         collection=_COLLECTION[visibility],
+        network_new=network_new,
+        network_spoofed=network_spoofed,
     )
