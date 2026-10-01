@@ -150,10 +150,18 @@ GET    /network/status               Nmap installé ? version, Npcap, sous-rése
 GET    /network/devices              inventaire (+ ports, statut, risque agrégé)
 GET    /network/devices/{id}         fiche : ports, conseils port_risk, historique
 PATCH  /network/devices/{id}         label, approbation                 (analyst+, audit)
-POST   /network/scan                 {profile, device_id?}              (analyst+, audit, 429, 409 si réseau public)
+POST   /network/scan                 {profile, device_id?}  -> 202      (analyst+, audit, 429, 409 si réseau public)
 GET    /network/scans                derniers scans
+POST   /network/gateway/accept       {device_id} nouvelle box acceptée  (ADMIN, audit)
 POST   /network/baseline             nouvelle référence                 (admin, audit)
 ```
+
+*Décisions (étape 3)* ✅ :
+- **Scan à la demande en tâche de fond** (202) : l'analyse approfondie dure jusqu'à 3 min. L'avancement se lit dans `/network/status` (`running`), et un seul scan tourne à la fois (409 sinon).
+- **Analyse approfondie = exploration** : elle couvre 1 000 ports contre 100 en routine. Un port jamais regardé n'est pas « nouveau » : il rejoint la référence, et seuls les services à risque alertent.
+- **Accepter une nouvelle box est réservé à l'admin** (`/network/gateway/accept`) : c'est ce qui désarme l'alerte d'usurpation. L'approbation d'un appareil ordinaire reste ouverte à l'analyste.
+- **Validation stricte** : profils fermés, `device_id` au format `<clé réseau>:<mac>` et limité au réseau courant (404 sinon), libellé sans caractères de contrôle, `approve` en booléen strict (`"yes"` ou `1` refusés).
+- **Limite : 2 scans par minute et par utilisateur**. Seuls les scans réellement lancés comptent, pas ceux refusés.
 
 ## 4. Blender : l'actif 3D du Sonar
 

@@ -29,6 +29,7 @@ from app.routers import (
     launcher,
     metrics,
     mitre,
+    network,
     notifications,
     reports,
     rules,
@@ -112,12 +113,12 @@ async def lifespan(app: FastAPI):
     # Threat Intel : listes publiques (au démarrage puis toutes les 12 h) et vulnérabilités du poste.
     intel = [asyncio.create_task(feeds.run_forever()), asyncio.create_task(vulns.run_forever())] if settings.intel_feeds else []
     watch = asyncio.create_task(persistence.run_forever()) if settings.persistence_watch else None
-    network = asyncio.create_task(sonar.run_forever()) if settings.network_watch else None
+    sonar_task = asyncio.create_task(sonar.run_forever()) if settings.network_watch else None
     yield
     warmup.cancel()
     for task in intel:
         task.cancel()
-    for task in (watch, network):
+    for task in (watch, sonar_task):
         if task is not None:
             task.cancel()
     if collector is not None:
@@ -160,6 +161,7 @@ app.include_router(stats.router)
 app.include_router(rules.router)
 app.include_router(metrics.router)
 app.include_router(mitre.router)
+app.include_router(network.router)
 app.include_router(system_control.router)
 app.include_router(launcher.router)
 

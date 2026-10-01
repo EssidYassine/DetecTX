@@ -172,8 +172,12 @@ async def enrich(key: str, hosts: list[Host], nmap: Path | None) -> None:
         await session.commit()
 
 
-async def ingest_ports(key: str, hosts: list[Host], now: datetime) -> list[dict]:
-    """Rapproche les ports vus de la référence de chaque appareil ; rend les candidats d'alerte."""
+async def ingest_ports(key: str, hosts: list[Host], now: datetime, *, explore: bool = False) -> list[dict]:
+    """Rapproche les ports vus de la référence de chaque appareil ; rend les candidats d'alerte.
+
+    explore : analyse approfondie (1 000 ports au lieu de 100). Un port jamais regardé n'est pas
+    « nouveau » : il rejoint la référence, et seuls les services à risque sont signalés.
+    """
     candidates: list[dict] = []
     async with SessionLocal() as session:
         net = await session.get(NetNetwork, key)
@@ -189,11 +193,16 @@ async def ingest_ports(key: str, hosts: list[Host], now: datetime) -> list[dict]
                 continue  # pas encore réconcilié (la découverte passe avant)
             first = device.ports_scanned_at is None
             existing = {(r.proto, r.port): r for r in rows[device.id]}
-            candidates += assess_ports(device_id=device.id, who=_who(device), first_scan=first, known=set(existing), ports=h.ports, now=now)
+            if explore and not first:
+                unseen = tuple(p for p in h.ports if (p.proto, p.port) not in existing)
+                candidates += assess_ports(device_id=device.id, who=_who(device), first_scan=True, known=set(), ports=unseen, now=now)
+            else:
+                candidates += assess_ports(device_id=device.id, who=_who(device), first_scan=first, known=set(existing), ports=h.ports, now=now)
             for p in h.ports:
                 row = existing.get((p.proto, p.port))
                 if row is None:
-                    row = NetPort(device_id=device.id, proto=p.proto, port=p.port, status="baseline" if first else "new", first_seen=now, last_seen=now)
+                    status = "baseline" if first or explore else "new"
+                    row = NetPort(device_id=device.id, proto=p.proto, port=p.port, status=status, first_seen=now, last_seen=now)
                     session.add(row)
                     existing[(p.proto, p.port)] = row
                 row.last_seen = now
@@ -256,6 +265,18 @@ async def port_scan(obs: Observation, nmap: Path, actor: str = SYSTEM_ACTOR) -> 
     subnet = target.scan_subnet(obs.interface.network)
     hosts = [h for h in await _run(nmap, "ports", subnet, actor) if h.ip != obs.interface.ip]
     return await service.raise_alerts(await ingest_ports(service.network_key(obs), hosts, datetime.now(timezone.utc)))
+
+
+async def deep_scan(obs: Observation, nmap: Path, device_ip: str, actor: str) -> list[dict]:
+    """Analyse approfondie d'UN appareil (services, versions, système). La cible vient de l'inventaire."""
+    if _state["raw"] is False:
+        raise ScanError("Analyse approfondie indisponible : Npcap est réservé aux administrateurs.")
+    host_ip = target.scan_host(device_ip, target.scan_subnet(obs.interface.network))
+    hosts = [h for h in await _run(nmap, "deep", host_ip, actor) if h.ip == device_ip]
+    key = service.network_key(obs)
+    created = await service.raise_alerts(await ingest_ports(key, hosts, datetime.now(timezone.utc), explore=True))
+    await enrich(key, hosts, nmap)
+    return created
 
 
 def raw_available() -> bool | None:
