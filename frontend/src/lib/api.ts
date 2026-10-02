@@ -1386,3 +1386,6 @@ export const startNetworkScan = (profile: ScanProfile, deviceId?: string) =>
   networkCall<NetRunning>("/scan", { method: "POST", body: deviceId ? { profile, device_id: deviceId } : { profile } });
 export const acceptNetworkGateway = (deviceId: string) => networkCall<NetDevice>("/gateway/accept", { method: "POST", body: { device_id: deviceId } });
 export const resetNetworkBaseline = () => networkCall<NetInventory>("/baseline", { method: "POST" });
+/** Catégorie Windows du réseau connecté (admin, invite UAC). Bloquant jusqu'à la réponse de l'invite. */
+export const setNetworkCategory = (category: "private" | "public") =>
+  networkCall<{ ok: boolean; already: boolean; name: string; category: string }>("/category", { method: "POST", body: { category } });

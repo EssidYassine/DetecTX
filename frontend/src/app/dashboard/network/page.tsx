@@ -7,6 +7,7 @@ import {
   fetchNetworkDevices,
   fetchNetworkStatus,
   resetNetworkBaseline,
+  setNetworkCategory,
   startNetworkScan,
   updateNetworkDevice,
   type NetInventory,
@@ -40,6 +41,7 @@ export default function NetworkPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmPrivate, setConfirmPrivate] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const wasRunning = useRef(false);
 
@@ -134,6 +136,21 @@ export default function NetworkPage() {
                 {isPublic ? "réseau public" : "réseau privé"}
               </span>
             )}
+            {net && isAdmin && isPublic && !confirmPrivate && (
+              <button onClick={() => setConfirmPrivate(true)} disabled={busy} className="rounded-lg bg-accent px-2 py-0.5 text-xs font-medium text-accent-fg disabled:opacity-40">
+                Passer en réseau privé…
+              </button>
+            )}
+            {net && isAdmin && !isPublic && (
+              <button
+                onClick={() => void act(() => setNetworkCategory("public"), "Réseau repassé en Public : scans actifs désactivés.", "status")}
+                disabled={busy}
+                title="Remet le profil Public de Windows (plus prudent hors de chez vous)"
+                className="text-xs text-muted hover:text-foreground disabled:opacity-40"
+              >
+                repasser en public
+              </button>
+            )}
             {status && !status.online && <span className="rounded-lg bg-critical/15 px-2 py-0.5 text-xs text-critical">hors ligne</span>}
           </div>
           <p className={`truncate text-sm ${spoofed && !error && !notice ? "text-critical" : "text-muted"}`} title={message}>
@@ -147,6 +164,32 @@ export default function NetworkPage() {
           <Kpi label="Découverte" value={status?.last_discovery ? fmtAgo(status.last_discovery, now) : "—"} sub={blocked ? "mode passif" : `toutes les ${status?.schedule.discovery_min ?? 15} min`} tone="foreground" />
         </div>
       </div>
+
+      {confirmPrivate && net && (
+        <div className="rounded-xl border border-warn/40 bg-warn/10 p-3 text-xs" role="alertdialog" aria-label="Passer le réseau en privé">
+          <p className="font-semibold text-warn">Passer « {net.name} » en réseau privé ?</p>
+          <p className="mt-1 leading-relaxed">
+            À faire <strong>uniquement chez vous</strong> (ou sur un réseau dont vous êtes responsable). En profil Privé, Windows fait confiance au réseau : le pare-feu autorise la découverte et le partage, et DeTecTX peut scanner les
+            appareils. Dans un café, un hôtel ou à l&apos;école, restez en Public. Windows va vous demander de confirmer.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              onClick={() => {
+                setConfirmPrivate(false);
+                setNotice("Confirmez dans la fenêtre de Windows…");
+                void act(() => setNetworkCategory("private"), "Réseau passé en Privé : les scans actifs sont disponibles.", "status");
+              }}
+              disabled={busy}
+              className="rounded-lg bg-accent px-3 py-1.5 font-medium text-accent-fg disabled:opacity-40"
+            >
+              Oui, c&apos;est mon réseau à la maison
+            </button>
+            <button onClick={() => setConfirmPrivate(false)} className="rounded-lg px-3 py-1.5 text-muted hover:text-foreground">
+              Annuler
+            </button>
+          </div>
+        </div>
+      )}
 
       {canAct && (
         <div className="flex flex-wrap items-center gap-2 text-xs">

@@ -1,10 +1,11 @@
 """Sonar : réseau local (inventaire, scans à la demande, référence).
 
 Droits : tout utilisateur connecté lit ; analyste et admin scannent, renomment, approuvent ;
-seul l'admin accepte une nouvelle box (ce qui désarme l'alerte d'usurpation) ou repart d'une
-nouvelle référence. Chaque action est inscrite au journal d'audit.
+seul l'admin accepte une nouvelle box (ce qui désarme l'alerte d'usurpation), repart d'une
+nouvelle référence ou change la catégorie Windows du réseau (Public <-> Privé, via l'invite UAC). Chaque action est inscrite au journal d'audit.
 """
 
+import asyncio
 import logging
 import time
 from collections import deque
@@ -18,10 +19,12 @@ from app.network import inventory, service, sonar
 from app.network.neighbors import Observation
 from app.schemas.network import (
     DEVICE_ID_PATTERN,
+    CategoryChange,
     DeviceUpdate,
     GatewayAccept,
     ScanRequest,
 )
+from app.services import network_profile
 
 router = APIRouter(prefix="/network", tags=["network"])
 audit_log = logging.getLogger("detectx.audit")
@@ -129,3 +132,22 @@ async def network_baseline(user: User = Depends(require_role(Role.admin))) -> di
     audit_log.warning("network_baseline_reset actor=%s network=%s", user.email, obs.interface.network)
     await service.reconcile(obs)  # référence immédiate, sans attendre le cycle suivant
     return await inventory.devices(_key(obs))
+
+
+@router.post("/category")
+async def network_category(body: CategoryChange, user: User = Depends(require_role(Role.admin))) -> dict:
+    """Passe le réseau connecté en Privé (scans actifs autorisés) ou le remet en Public.
+
+    Bloquant côté assistant : Windows affiche l'invite UAC, l'utilisateur confirme ou refuse.
+    """
+    obs = await _online()
+    if len(obs.network_names) != 1:
+        raise HTTPException(status_code=409, detail="Réseau connecté non identifié (aucun ou plusieurs) : changez la catégorie dans les paramètres Windows.")
+    name = obs.network_names[0]
+    try:
+        result = await asyncio.to_thread(network_profile.set_category, name, body.category)
+    except network_profile.ActionError as e:
+        audit_log.warning("network_category actor=%s network=%r category=%s refused=%s", user.email, name, body.category, e.status)
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    audit_log.warning("network_category actor=%s network=%r category=%s already=%s", user.email, name, body.category, result["already"])
+    return result

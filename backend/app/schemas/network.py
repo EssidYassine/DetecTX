@@ -45,3 +45,9 @@ class ScanRequest(BaseModel):
 
 class GatewayAccept(BaseModel):
     device_id: DeviceId
+
+
+class CategoryChange(BaseModel):
+    """Catégorie Windows du réseau connecté. « domain » n'est jamais demandable."""
+
+    category: Literal["private", "public"]
