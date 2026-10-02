@@ -248,5 +248,10 @@ Frontend : `npm run lint` et `npm run build`. Blender : lancer `build_sonar.py` 
 7. **Usurpation ARP** : à valider **dans une VM ou un labo isolé** (par exemple avec `arpspoof` entre deux VM), jamais sur un réseau partagé. Cela rejoint la phase 8 (tests défensifs).
 8. `pytest backend/tests/test_network.py` passe au vert, ainsi que le lint et le build du frontend.
 
-## 9. Hors périmètre (roadmap)
+## 9. Suite
+
+Étapes 1 à 5 livrées (`b4271c2` → `fc56fd3`), plus le bouton « Passer en réseau privé » (`de2304b`).
+La suite — objectifs en français, profils Nmap personnalisés, historique — est décrite dans [`atelier-nmap.md`](atelier-nmap.md).
+
+## 10. Hors périmètre (roadmap)
 Analyse du trafic (Suricata/Zeek) ; détection d'un serveur DHCP pirate (`broadcast-dhcp-discover`, script NSE à évaluer) ; rapprochement des versions de services avec CISA KEV ; blocage d'un appareil via l'API de la box ; IPv6.
